@@ -1,21 +1,21 @@
-import { useState } from "react";
+import { useReducer, useState } from "react";
 import type { Square } from "chess.js";
 
 import "./App.css";
 import {
   PROMOTION_OPTIONS,
-  STARTING_FEN,
-  applyMove,
-  createGame,
-  getAllLegalMoves,
   getBoardCells,
-  getCapturedPieces,
-  getGameStatus,
   getLegalMoves,
   getMoveTargets,
   type EngineMove,
+  type MoveInput,
   type PromotionPiece,
 } from "./chess-engine";
+import {
+  INITIAL_GAME_TIMELINE_STATE,
+  buildGameTimelineSnapshot,
+  gameTimelineReducer,
+} from "./game-state";
 
 type PromotionRequest = {
   moves: EngineMove[];
@@ -65,41 +65,83 @@ function buildMoveRows(moves: EngineMove[]) {
   return rows;
 }
 
+function toMoveInput(move: EngineMove): MoveInput {
+  return {
+    from: move.from,
+    promotion: move.promotion,
+    to: move.to,
+  };
+}
+
 function App() {
-  const [fen, setFen] = useState(STARTING_FEN);
+  const [timelineState, dispatchTimeline] = useReducer(
+    gameTimelineReducer,
+    INITIAL_GAME_TIMELINE_STATE,
+  );
   const [selectedSquare, setSelectedSquare] = useState<Square | null>(null);
-  const [moveLog, setMoveLog] = useState<EngineMove[]>([]);
   const [pendingPromotion, setPendingPromotion] = useState<PromotionRequest | null>(null);
 
-  const game = createGame(fen);
+  const {
+    canRedo,
+    canUndo,
+    capturedPieces,
+    futureCount,
+    game,
+    historyIndex,
+    legalMoveCount,
+    moveLog,
+    pgn,
+    status: gameStatus,
+    totalMoves,
+  } = buildGameTimelineSnapshot(timelineState);
   const boardCells = getBoardCells(game);
-  const gameStatus = getGameStatus(game);
-  const capturedPieces = getCapturedPieces(game);
-  const legalMoveCount = getAllLegalMoves(game).length;
   const selectedMoves = selectedSquare ? getLegalMoves(game, selectedSquare) : [];
   const moveTargets = getMoveTargets(selectedMoves);
   const lastMove = moveLog.at(-1) ?? null;
   const moveRows = buildMoveRows(moveLog);
+  const hasMoves = historyIndex > 0;
+  const pgnPreview = pgn || "No moves played yet. White has the first turn.";
+  const timelineSummary =
+    futureCount > 0 ? `${historyIndex} active / ${totalMoves} recorded` : `${historyIndex} plies`;
   const statusDetail = pendingPromotion
     ? `${toTitleCase(gameStatus.turn)} reached ${pendingPromotion.to}. Choose a promotion piece to complete the move.`
     : gameStatus.detail;
   const canInteract = gameStatus.phase !== "checkmate" && gameStatus.phase !== "stalemate";
 
-  function commitMove(move: EngineMove) {
-    const nextGame = createGame(fen);
-    const executed = applyMove(nextGame, move);
-
-    setFen(nextGame.fen());
-    setMoveLog((current) => [...current, executed]);
+  function clearTransientSelection() {
     setPendingPromotion(null);
     setSelectedSquare(null);
   }
 
+  function commitMove(move: MoveInput) {
+    dispatchTimeline({
+      move,
+      type: "commit",
+    });
+    clearTransientSelection();
+  }
+
   function resetGame() {
-    setFen(STARTING_FEN);
-    setMoveLog([]);
-    setPendingPromotion(null);
-    setSelectedSquare(null);
+    dispatchTimeline({ type: "reset" });
+    clearTransientSelection();
+  }
+
+  function handleUndo() {
+    if (!canUndo) {
+      return;
+    }
+
+    dispatchTimeline({ type: "undo" });
+    clearTransientSelection();
+  }
+
+  function handleRedo() {
+    if (!canRedo) {
+      return;
+    }
+
+    dispatchTimeline({ type: "redo" });
+    clearTransientSelection();
   }
 
   function handlePromotionChoice(piece: PromotionPiece) {
@@ -113,7 +155,7 @@ function App() {
       return;
     }
 
-    commitMove(selectedMove);
+    commitMove(toMoveInput(selectedMove));
   }
 
   function handleSquareClick(square: Square) {
@@ -134,7 +176,7 @@ function App() {
         return;
       }
 
-      commitMove(destinationMoves[0]);
+      commitMove(toMoveInput(destinationMoves[0]));
       return;
     }
 
@@ -168,8 +210,8 @@ function App() {
           <h1>Legal move generation, special rules, and end-state detection in one board.</h1>
           <p className="lede">
             The starter shell is now replaced with a full game loop: every move is validated, the
-            board only exposes legal targets, and the engine surfaces check, checkmate, stalemate,
-            castling, en passant, and promotion.
+            board only exposes legal targets, and turn state, PGN history, captured pieces, and
+            undo/redo stay synchronized through the same engine timeline.
           </p>
         </div>
 
@@ -195,7 +237,7 @@ function App() {
             </div>
             <div className="metric">
               <span className="metric-label">Move count</span>
-              <strong>{moveLog.length}</strong>
+              <strong>{historyIndex}</strong>
             </div>
           </div>
         </div>
@@ -207,12 +249,31 @@ function App() {
             <div>
               <p className="panel-label">Board</p>
               <p className="panel-caption">
-                Click a piece to reveal legal moves. Illegal moves never become selectable.
+                Click a piece to reveal legal moves. Undo, redo, and reset all rebuild the live
+                board from the active move timeline.
               </p>
             </div>
-            <button type="button" className="secondary-button" onClick={resetGame}>
-              Reset game
-            </button>
+            <div className="toolbar-actions" aria-label="Game state controls">
+              <button
+                type="button"
+                className="secondary-button"
+                onClick={handleUndo}
+                disabled={!canUndo}
+              >
+                Undo move
+              </button>
+              <button
+                type="button"
+                className="secondary-button"
+                onClick={handleRedo}
+                disabled={!canRedo}
+              >
+                Redo move
+              </button>
+              <button type="button" className="secondary-button" onClick={resetGame}>
+                Reset game
+              </button>
+            </div>
           </div>
 
           <div className="board-frame">
@@ -352,10 +413,17 @@ function App() {
 
           <div className="info-card move-log-card">
             <div className="move-log-header">
-              <p className="panel-label">Move Log</p>
-              <span className="move-log-total">{moveLog.length} plies</span>
+              <div>
+                <p className="panel-label">PGN Move History</p>
+                <p className="panel-caption">
+                  The current line is rendered from the active timeline cursor and stays aligned
+                  with captures, turn, and board position.
+                </p>
+              </div>
+              <span className="move-log-total">{timelineSummary}</span>
             </div>
-            {moveRows.length > 0 ? (
+            <p className="pgn-preview">{pgnPreview}</p>
+            {hasMoves ? (
               <ol className="move-list">
                 {moveRows.map((row) => (
                   <li key={row.number} className="move-row">
@@ -368,6 +436,16 @@ function App() {
             ) : (
               <p className="supporting-copy">No moves played yet. White has the first turn.</p>
             )}
+            {gameStatus.inCheck ? (
+              <p className="supporting-copy">
+                {toTitleCase(gameStatus.turn)} remains in check until a legal response is committed.
+              </p>
+            ) : null}
+            {futureCount > 0 ? (
+              <p className="supporting-copy">
+                Redo buffer available: {futureCount} future {futureCount === 1 ? "move" : "moves"}.
+              </p>
+            ) : null}
           </div>
         </aside>
       </section>
