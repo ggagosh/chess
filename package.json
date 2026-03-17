@@ -1,0 +1,28 @@
+{
+  "name": "chess",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "build": "tsc -b && vite build",
+    "lint": "oxlint --deny-warnings .",
+    "format": "oxfmt --write src index.html package.json tsconfig.json tsconfig.app.json tsconfig.node.json vite.config.ts .oxlintrc.json .oxfmtrc.json",
+    "format:check": "oxfmt --check src index.html package.json tsconfig.json tsconfig.app.json tsconfig.node.json vite.config.ts .oxlintrc.json .oxfmtrc.json",
+    "preview": "vite preview"
+  },
+  "dependencies": {
+    "react": "^19.2.4",
+    "react-dom": "^19.2.4"
+  },
+  "devDependencies": {
+    "@types/node": "^24.12.0",
+    "@types/react": "^19.2.14",
+    "@types/react-dom": "^19.2.3",
+    "@vitejs/plugin-react": "^6.0.1",
+    "oxfmt": "^0.41.0",
+    "oxlint": "^1.56.0",
+    "typescript": "~5.9.3",
+    "vite": "^8.0.0"
+  }
+}

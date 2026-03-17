@@ -1,0 +1,63 @@
+:root {
+  font-family: "Avenir Next", "Segoe UI", sans-serif;
+  line-height: 1.5;
+  font-weight: 400;
+  color: #201914;
+  background:
+    radial-gradient(circle at top left, rgba(255, 233, 198, 0.8), transparent 32%),
+    linear-gradient(180deg, #f8f1e2 0%, #eadfcb 48%, #ddd2be 100%);
+  font-synthesis: none;
+  text-rendering: optimizeLegibility;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+#root {
+  min-height: 100vh;
+}
+
+body {
+  margin: 0;
+  min-height: 100vh;
+}
+
+body::before {
+  content: "";
+  position: fixed;
+  inset: 18px;
+  border: 1px solid rgba(68, 50, 32, 0.12);
+  border-radius: 36px;
+  pointer-events: none;
+}
+
+h1,
+h2 {
+  font-family: "Iowan Old Style", "Palatino Linotype", "Book Antiqua", serif;
+  color: #1f1810;
+}
+
+p {
+  margin: 0;
+}
+
+code {
+  display: inline-flex;
+  align-items: center;
+  padding: 4px 8px;
+  border-radius: 999px;
+  background: rgba(41, 31, 21, 0.08);
+  color: #1f1810;
+  font-family: "SFMono-Regular", Menlo, Monaco, monospace;
+  font-size: 0.9rem;
+}
+
+@media (max-width: 920px) {
+  body::before {
+    inset: 10px;
+    border-radius: 24px;
+  }
+}
