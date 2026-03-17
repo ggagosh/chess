@@ -1,4 +1,4 @@
-import { useEffect, useReducer, useState } from "react";
+import { useEffect, useState } from "react";
 import type { Square } from "chess.js";
 
 import "./App.css";
@@ -7,19 +7,22 @@ import { GameResultModal } from "./components/GameResultModal";
 import { MoveHistoryPanel } from "./components/MoveHistoryPanel";
 import { PawnPromotionDialog } from "./components/PawnPromotionDialog";
 import {
+  applyMove,
+  createGame,
   getBoardCells,
+  getGameStatus,
   getLegalMoves,
   getMoveTargets,
   type EngineMove,
+  type GamePhase,
   type MoveInput,
+  type PlayerColor,
   type PromotionPiece,
 } from "./chess-engine";
 import { createInitialClockState, tickClock } from "./game-clock";
-import {
-  INITIAL_GAME_TIMELINE_STATE,
-  buildGameTimelineSnapshot,
-  gameTimelineReducer,
-} from "./game-state";
+import { playGameSound, type GameSound } from "./game-sounds";
+import { createFreshSession, loadGameSession, persistGameSession } from "./game-session";
+import { buildGameTimelineSnapshot, gameTimelineReducer } from "./game-state";
 
 type PromotionRequest = {
   moves: EngineMove[];
@@ -44,11 +47,34 @@ function toMoveInput(move: EngineMove): MoveInput {
   };
 }
 
+function getBoardPerspectiveLabel(orientation: PlayerColor) {
+  return `${toTitleCase(orientation)} at bottom`;
+}
+
+function getCaptureRailColors(orientation: PlayerColor) {
+  return orientation === "white"
+    ? { bottom: "white" as const, top: "black" as const }
+    : { bottom: "black" as const, top: "white" as const };
+}
+
+function getCaptureCaption(color: PlayerColor) {
+  return color === "white" ? "Pieces captured by Black" : "Pieces captured by White";
+}
+
+function getMoveSound(move: EngineMove, phase: GamePhase, inCheck: boolean): GameSound {
+  if (phase === "checkmate" || phase === "stalemate") {
+    return "game-over";
+  }
+
+  if (inCheck) {
+    return "check";
+  }
+
+  return move.isCapture || move.isEnPassant ? "capture" : "move";
+}
+
 function App() {
-  const [timelineState, dispatchTimeline] = useReducer(
-    gameTimelineReducer,
-    INITIAL_GAME_TIMELINE_STATE,
-  );
+  const [session, setSession] = useState(() => loadGameSession());
   const [selectedSquare, setSelectedSquare] = useState<Square | null>(null);
   const [pendingPromotion, setPendingPromotion] = useState<PromotionRequest | null>(null);
   const [clockState, setClockState] = useState(createInitialClockState);
@@ -58,6 +84,7 @@ function App() {
     canRedo,
     canUndo,
     capturedPieces,
+    fen,
     futureCount,
     game,
     historyIndex,
@@ -66,8 +93,8 @@ function App() {
     pgn,
     status: gameStatus,
     totalMoves,
-  } = buildGameTimelineSnapshot(timelineState);
-  const boardCells = getBoardCells(game);
+  } = buildGameTimelineSnapshot(session.timeline);
+  const boardCells = getBoardCells(game, session.orientation);
   const selectedMoves = selectedSquare ? getLegalMoves(game, selectedSquare) : [];
   const moveTargets = getMoveTargets(selectedMoves);
   const lastMove = moveLog.at(-1) ?? null;
@@ -92,6 +119,12 @@ function App() {
         winner: gameStatus.winner,
       }
     : null;
+  const boardPerspective = getBoardPerspectiveLabel(session.orientation);
+  const captureRails = getCaptureRailColors(session.orientation);
+
+  useEffect(() => {
+    persistGameSession(session);
+  }, [session]);
 
   useEffect(() => {
     if (isGameOver) {
@@ -132,19 +165,60 @@ function App() {
     setSelectedSquare(null);
   }
 
-  function commitMove(move: MoveInput) {
-    dispatchTimeline({
-      move,
-      type: "commit",
-    });
-    clearTransientSelection();
+  function renderSideRack(color: PlayerColor) {
+    const pieces = capturedPieces[color];
+
+    return (
+      <div className="side-rack">
+        <div className="side-rack-copy">
+          <span className="side-rack-player">{toTitleCase(color)}</span>
+          <span className="side-rack-caption">{getCaptureCaption(color)}</span>
+        </div>
+        <GameClock
+          isActive={!isGameOver && gameStatus.turn === color}
+          isGameOver={isGameOver}
+          isInCheck={!isGameOver && gameStatus.turn === color && gameStatus.inCheck}
+          player={color}
+          timeRemainingMs={clockState[color]}
+        />
+        <div className="captured-row">
+          {pieces.length > 0 ? (
+            pieces.map((piece, index) => (
+              <span
+                key={`${piece.label}-${color}-${index}`}
+                className="captured-piece"
+                aria-label={piece.label}
+                title={piece.label}
+              >
+                {piece.glyph}
+              </span>
+            ))
+          ) : (
+            <span className="captured-empty">None</span>
+          )}
+        </div>
+      </div>
+    );
   }
 
-  function resetGame() {
-    dispatchTimeline({ type: "reset" });
+  function commitMove(move: MoveInput) {
+    const nextGame = createGame(fen);
+    const executed = applyMove(nextGame, move);
+    const nextStatus = getGameStatus(nextGame);
+
+    setSession((current) => ({
+      ...current,
+      timeline: gameTimelineReducer(current.timeline, {
+        move: toMoveInput(executed),
+        type: "commit",
+      }),
+    }));
     clearTransientSelection();
-    setClockState(createInitialClockState());
-    setIsResultModalOpen(false);
+
+    void playGameSound(
+      getMoveSound(executed, nextStatus.phase, nextStatus.inCheck),
+      session.soundEnabled,
+    );
   }
 
   function handleUndo() {
@@ -152,7 +226,10 @@ function App() {
       return;
     }
 
-    dispatchTimeline({ type: "undo" });
+    setSession((current) => ({
+      ...current,
+      timeline: gameTimelineReducer(current.timeline, { type: "undo" }),
+    }));
     clearTransientSelection();
   }
 
@@ -161,8 +238,39 @@ function App() {
       return;
     }
 
-    dispatchTimeline({ type: "redo" });
+    setSession((current) => ({
+      ...current,
+      timeline: gameTimelineReducer(current.timeline, { type: "redo" }),
+    }));
     clearTransientSelection();
+  }
+
+  function startNewGame() {
+    setSession((current) =>
+      createFreshSession({
+        orientation: current.orientation,
+        soundEnabled: current.soundEnabled,
+      }),
+    );
+    clearTransientSelection();
+    setClockState(createInitialClockState());
+    setIsResultModalOpen(false);
+
+    void playGameSound("reset", session.soundEnabled);
+  }
+
+  function flipBoard() {
+    setSession((current) => ({
+      ...current,
+      orientation: current.orientation === "white" ? "black" : "white",
+    }));
+  }
+
+  function toggleSound() {
+    setSession((current) => ({
+      ...current,
+      soundEnabled: !current.soundEnabled,
+    }));
   }
 
   function handlePromotionChoice(piece: PromotionPiece) {
@@ -237,8 +345,8 @@ function App() {
             <p className="lede">
               The starter shell now carries the full game loop plus the supporting match UI: clocks
               tick with the active side, promotions resolve in a focused dialog, every move lands in
-              history, and turn state, PGN history, captured pieces, and undo/redo stay synchronized
-              through the same engine timeline.
+              history, and board perspective, sound, and session recovery stay synchronized through
+              the same engine timeline.
             </p>
           </div>
 
@@ -276,13 +384,13 @@ function App() {
               <div>
                 <p className="panel-label">Board</p>
                 <p className="panel-caption">
-                  Click a piece to reveal legal moves. Undo, redo, and reset all rebuild the live
-                  board from the active move timeline, and the board locks while promotion is
-                  awaiting your choice or after the game ends.
+                  {boardPerspective}. Click a piece to reveal legal moves. Undo, redo, and starting
+                  a new game rebuild the live board from the active move timeline, and the board
+                  locks while promotion is awaiting your choice or after the game ends.
                 </p>
               </div>
 
-              <div className="toolbar-actions" aria-label="Game state controls">
+              <div className="toolbar-actions" aria-label="Game controls">
                 <button
                   type="button"
                   className="secondary-button"
@@ -299,45 +407,32 @@ function App() {
                 >
                   Redo move
                 </button>
-                <button type="button" className="secondary-button" onClick={resetGame}>
-                  Reset game
+                <button type="button" className="secondary-button" onClick={flipBoard}>
+                  Flip board
+                </button>
+                <button
+                  type="button"
+                  className={`secondary-button toggle-button ${session.soundEnabled ? "is-active" : ""}`}
+                  aria-pressed={session.soundEnabled}
+                  onClick={toggleSound}
+                >
+                  {session.soundEnabled ? "Sound on" : "Sound off"}
+                </button>
+                <button
+                  type="button"
+                  className="secondary-button primary-action"
+                  onClick={startNewGame}
+                >
+                  New game
                 </button>
               </div>
             </div>
 
             <div className="board-frame">
-              <div className="side-rack">
-                <div className="side-rack-copy">
-                  <span className="side-rack-player">Black</span>
-                  <span className="side-rack-caption">Pieces captured by White</span>
-                </div>
-                <GameClock
-                  isActive={!isGameOver && gameStatus.turn === "black"}
-                  isGameOver={isGameOver}
-                  isInCheck={!isGameOver && gameStatus.turn === "black" && gameStatus.inCheck}
-                  player="black"
-                  timeRemainingMs={clockState.black}
-                />
-                <div className="captured-row">
-                  {capturedPieces.black.length > 0 ? (
-                    capturedPieces.black.map((piece, index) => (
-                      <span
-                        key={`${piece.label}-black-${index}`}
-                        className="captured-piece"
-                        aria-label={piece.label}
-                        title={piece.label}
-                      >
-                        {piece.glyph}
-                      </span>
-                    ))
-                  ) : (
-                    <span className="captured-empty">None</span>
-                  )}
-                </div>
-              </div>
+              {renderSideRack(captureRails.top)}
 
               <div className="board-grid" role="grid" aria-label="Interactive chess board">
-                {boardCells.map((cell) => {
+                {boardCells.map((cell, index) => {
                   const targetMoves = moveTargets.get(cell.square) ?? [];
                   const isSelected = selectedSquare === cell.square;
                   const isLegalTarget = targetMoves.length > 0;
@@ -358,6 +453,10 @@ function App() {
                   ]
                     .filter(Boolean)
                     .join(", ");
+                  const displayFileIndex = index % 8;
+                  const displayRankIndex = Math.floor(index / 8);
+                  const shouldShowRankLabel = displayFileIndex === 0;
+                  const shouldShowFileLabel = displayRankIndex === 7;
 
                   return (
                     <button
@@ -378,47 +477,17 @@ function App() {
                       aria-label={squareLabel}
                       onClick={() => handleSquareClick(cell.square)}
                     >
-                      {cell.file === "a" ? <span className="rank-label">{cell.rank}</span> : null}
-                      {cell.rank === 1 ? <span className="file-label">{cell.file}</span> : null}
+                      {shouldShowRankLabel ? <span className="rank-label">{cell.rank}</span> : null}
+                      {shouldShowFileLabel ? <span className="file-label">{cell.file}</span> : null}
                       {cell.piece ? (
-                        <span className={`piece piece-${cell.piece.color}`}>
-                          {cell.piece.glyph}
-                        </span>
+                        <span className={`piece piece-${cell.piece.color}`}>{cell.piece.glyph}</span>
                       ) : null}
                     </button>
                   );
                 })}
               </div>
 
-              <div className="side-rack">
-                <div className="side-rack-copy">
-                  <span className="side-rack-player">White</span>
-                  <span className="side-rack-caption">Pieces captured by Black</span>
-                </div>
-                <GameClock
-                  isActive={!isGameOver && gameStatus.turn === "white"}
-                  isGameOver={isGameOver}
-                  isInCheck={!isGameOver && gameStatus.turn === "white" && gameStatus.inCheck}
-                  player="white"
-                  timeRemainingMs={clockState.white}
-                />
-                <div className="captured-row">
-                  {capturedPieces.white.length > 0 ? (
-                    capturedPieces.white.map((piece, index) => (
-                      <span
-                        key={`${piece.label}-white-${index}`}
-                        className="captured-piece"
-                        aria-label={piece.label}
-                        title={piece.label}
-                      >
-                        {piece.glyph}
-                      </span>
-                    ))
-                  ) : (
-                    <span className="captured-empty">None</span>
-                  )}
-                </div>
-              </div>
+              {renderSideRack(captureRails.bottom)}
             </div>
           </div>
 
@@ -458,7 +527,7 @@ function App() {
         lastMove={lastMove}
         moveCount={historyIndex}
         onClose={() => setIsResultModalOpen(false)}
-        onReset={resetGame}
+        onReset={startNewGame}
         result={gameResult}
       />
     </>

@@ -5,6 +5,7 @@ import {
   applyMove,
   createGame,
   getAllLegalMoves,
+  getBoardCells,
   getGameStatus,
   getLegalMoves,
 } from "./chess-engine";
@@ -45,6 +46,21 @@ describe("chess-engine", () => {
 
     expect(game.get("g1")).toMatchObject({ color: "w", type: "k" });
     expect(game.get("f1")).toMatchObject({ color: "w", type: "r" });
+  });
+
+  it("reorders board cells for black orientation", () => {
+    const game = createGame(STARTING_FEN);
+
+    expect(
+      getBoardCells(game, "white")
+        .map((cell) => cell.square)
+        .slice(0, 4),
+    ).toEqual(["a8", "b8", "c8", "d8"]);
+    expect(
+      getBoardCells(game, "black")
+        .map((cell) => cell.square)
+        .slice(0, 4),
+    ).toEqual(["h1", "g1", "f1", "e1"]);
   });
 
   it("supports en passant captures", () => {

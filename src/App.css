@@ -216,13 +216,30 @@ h1 {
 }
 
 .secondary-button {
+  border: 1px solid rgba(67, 50, 30, 0.12);
+  background: rgba(255, 249, 239, 0.8);
+  color: #2f251a;
+}
+
+.secondary-button:hover:not(:disabled) {
+  background: rgba(247, 237, 218, 0.92);
+  transform: translateY(-1px);
+}
+
+.secondary-button.primary-action {
+  border-color: transparent;
   background: #3d5e46;
   color: #f8f1e3;
 }
 
-.secondary-button:hover:not(:disabled) {
+.secondary-button.primary-action:hover {
   background: #2f4a37;
-  transform: translateY(-1px);
+}
+
+.toggle-button.is-active {
+  border-color: rgba(62, 105, 77, 0.18);
+  background: rgba(62, 105, 77, 0.12);
+  color: #2f6041;
 }
 
 .secondary-button:disabled {
@@ -729,6 +746,11 @@ h1 {
   }
 
   .toolbar-actions {
+    width: 100%;
+    justify-content: flex-start;
+  }
+
+  .captured-row {
     justify-content: flex-start;
   }
 

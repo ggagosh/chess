@@ -71,7 +71,7 @@ export function GameResultModal({
           <button type="button" className="ghost-button" onClick={onClose}>
             Review board
           </button>
-          <button type="button" className="secondary-button" onClick={onReset}>
+          <button type="button" className="secondary-button primary-action" onClick={onReset}>
             Play again
           </button>
         </div>
