@@ -1,316 +1,378 @@
 import { useState } from "react";
+import type { Square } from "chess.js";
+
 import "./App.css";
 import {
-  BOARD_SIZE,
+  PROMOTION_OPTIONS,
+  STARTING_FEN,
   applyMove,
-  countLegalMoves,
-  createCheckDemoSnapshot,
-  createInitialSnapshot,
+  createGame,
+  getAllLegalMoves,
+  getBoardCells,
+  getCapturedPieces,
+  getGameStatus,
   getLegalMoves,
-  getPieceLabel,
-  indexToSquare,
-  isKingInCheck,
-  type GameSnapshot,
-  type Move,
-  type PieceColor,
-} from "./chess";
-import { getPieceAsset } from "./pieceAssets";
+  getMoveTargets,
+  type EngineMove,
+  type PromotionPiece,
+} from "./chess-engine";
 
-const boardSquares = Array.from({ length: BOARD_SIZE * BOARD_SIZE }, (_, index) => index);
-const files = ["a", "b", "c", "d", "e", "f", "g", "h"];
+type PromotionRequest = {
+  moves: EngineMove[];
+  to: Square;
+};
 
-function describeTurnState(
-  turn: PieceColor,
-  legalMoveCount: number,
-  turnInCheck: boolean,
-  whiteInCheck: boolean,
-  blackInCheck: boolean,
-) {
-  if (legalMoveCount === 0 && turnInCheck) {
-    return `${capitalize(turn)} is checkmated.`;
+const SPECIAL_RULES = [
+  "Castling rights are unlocked only when the king and rook stay unmoved, the path is clear, and the king never crosses check.",
+  "En passant appears only on the immediately following turn after a two-square pawn advance.",
+  "Promotion lets you choose queen, rook, bishop, or knight before the move is finalized.",
+];
+
+const PROMOTION_GLYPHS: Record<"white" | "black", Record<PromotionPiece, string>> = {
+  black: {
+    bishop: "♝",
+    knight: "♞",
+    queen: "♛",
+    rook: "♜",
+  },
+  white: {
+    bishop: "♗",
+    knight: "♘",
+    queen: "♕",
+    rook: "♖",
+  },
+};
+
+function toTitleCase(value: string): string {
+  return `${value[0].toUpperCase()}${value.slice(1)}`;
+}
+
+function buildMoveRows(moves: EngineMove[]) {
+  const rows: Array<{
+    black?: EngineMove;
+    number: number;
+    white: EngineMove;
+  }> = [];
+
+  for (let index = 0; index < moves.length; index += 2) {
+    rows.push({
+      black: moves[index + 1],
+      number: Math.floor(index / 2) + 1,
+      white: moves[index],
+    });
   }
 
-  if (legalMoveCount === 0) {
-    return "Stalemate.";
-  }
-
-  if (whiteInCheck && blackInCheck) {
-    return "Both kings are under pressure in the current demo state.";
-  }
-
-  if (turnInCheck) {
-    return `${capitalize(turn)} is in check.`;
-  }
-
-  if (whiteInCheck || blackInCheck) {
-    const colorInCheck = whiteInCheck ? "white" : "black";
-    return `${capitalize(colorInCheck)} is in check.`;
-  }
-
-  return `${capitalize(turn)} to move.`;
+  return rows;
 }
 
 function App() {
-  const [snapshot, setSnapshot] = useState<GameSnapshot>(createInitialSnapshot);
-  const [selectedSquare, setSelectedSquare] = useState<number | null>(null);
-  const [dragSource, setDragSource] = useState<number | null>(null);
-  const [lastMove, setLastMove] = useState<Move | null>(null);
+  const [fen, setFen] = useState(STARTING_FEN);
+  const [selectedSquare, setSelectedSquare] = useState<Square | null>(null);
+  const [moveLog, setMoveLog] = useState<EngineMove[]>([]);
+  const [pendingPromotion, setPendingPromotion] = useState<PromotionRequest | null>(null);
 
-  const interactionSquare = dragSource ?? selectedSquare;
-  const legalTargets =
-    interactionSquare === null || snapshot.board[interactionSquare]?.color !== snapshot.turn
-      ? []
-      : getLegalMoves(snapshot.board, interactionSquare);
-  const legalTargetSet = new Set(legalTargets);
-  const whiteInCheck = isKingInCheck(snapshot.board, "white");
-  const blackInCheck = isKingInCheck(snapshot.board, "black");
-  const turnInCheck = snapshot.turn === "white" ? whiteInCheck : blackInCheck;
-  const legalMoveCount = countLegalMoves(snapshot.board, snapshot.turn);
-  const statusLine = describeTurnState(
-    snapshot.turn,
-    legalMoveCount,
-    turnInCheck,
-    whiteInCheck,
-    blackInCheck,
-  );
-  const checkSummary =
-    whiteInCheck || blackInCheck
-      ? `${[whiteInCheck ? "White" : "", blackInCheck ? "Black" : ""]
-          .filter(Boolean)
-          .join(" and ")} king in check`
-      : "No king in check";
+  const game = createGame(fen);
+  const boardCells = getBoardCells(game);
+  const gameStatus = getGameStatus(game);
+  const capturedPieces = getCapturedPieces(game);
+  const legalMoveCount = getAllLegalMoves(game).length;
+  const selectedMoves = selectedSquare ? getLegalMoves(game, selectedSquare) : [];
+  const moveTargets = getMoveTargets(selectedMoves);
+  const lastMove = moveLog.at(-1) ?? null;
+  const moveRows = buildMoveRows(moveLog);
+  const statusDetail = pendingPromotion
+    ? `${toTitleCase(gameStatus.turn)} reached ${pendingPromotion.to}. Choose a promotion piece to complete the move.`
+    : gameStatus.detail;
+  const canInteract = gameStatus.phase !== "checkmate" && gameStatus.phase !== "stalemate";
 
-  const commitMove = (from: number, to: number) => {
-    if (!legalTargetSet.has(to)) {
+  function commitMove(move: EngineMove) {
+    const nextGame = createGame(fen);
+    const executed = applyMove(nextGame, move);
+
+    setFen(nextGame.fen());
+    setMoveLog((current) => [...current, executed]);
+    setPendingPromotion(null);
+    setSelectedSquare(null);
+  }
+
+  function resetGame() {
+    setFen(STARTING_FEN);
+    setMoveLog([]);
+    setPendingPromotion(null);
+    setSelectedSquare(null);
+  }
+
+  function handlePromotionChoice(piece: PromotionPiece) {
+    if (!pendingPromotion) {
       return;
     }
 
-    setSnapshot((current) => ({
-      board: applyMove(current.board, { from, to }),
-      turn: current.turn === "white" ? "black" : "white",
-      label: current.label,
-    }));
-    setLastMove({ from, to });
-    setSelectedSquare(null);
-    setDragSource(null);
-  };
+    const selectedMove = pendingPromotion.moves.find((move) => move.promotion === piece);
 
-  const resetBoard = (nextSnapshot: GameSnapshot) => {
-    setSnapshot(nextSnapshot);
-    setLastMove(null);
-    setSelectedSquare(null);
-    setDragSource(null);
-  };
-
-  const handleSquareClick = (index: number) => {
-    if (selectedSquare !== null && legalTargetSet.has(index)) {
-      commitMove(selectedSquare, index);
+    if (!selectedMove) {
       return;
     }
 
-    const piece = snapshot.board[index];
+    commitMove(selectedMove);
+  }
 
-    if (piece?.color !== snapshot.turn) {
+  function handleSquareClick(square: Square) {
+    if (!canInteract || pendingPromotion) {
+      return;
+    }
+
+    const destinationMoves = selectedSquare ? moveTargets.get(square) : undefined;
+
+    if (selectedSquare && destinationMoves) {
+      const promotionMoves = destinationMoves.filter((move) => move.promotion);
+
+      if (promotionMoves.length > 0) {
+        setPendingPromotion({
+          moves: promotionMoves,
+          to: square,
+        });
+        return;
+      }
+
+      commitMove(destinationMoves[0]);
+      return;
+    }
+
+    if (selectedSquare === square) {
       setSelectedSquare(null);
       return;
     }
 
-    setSelectedSquare((current) => (current === index ? null : index));
-  };
+    const piece = game.get(square);
 
-  const handleDragStart = (index: number, event: React.DragEvent<HTMLImageElement>) => {
-    if (snapshot.board[index]?.color !== snapshot.turn) {
-      event.preventDefault();
+    if (!piece) {
+      setSelectedSquare(null);
       return;
     }
 
-    event.dataTransfer.effectAllowed = "move";
-    event.dataTransfer.setData("text/plain", `${index}`);
-    setDragSource(index);
-    setSelectedSquare(index);
-  };
+    const pieceColor = piece.color === "w" ? "white" : "black";
 
-  const handleDragOver = (index: number, event: React.DragEvent<HTMLButtonElement>) => {
-    if (!legalTargetSet.has(index)) {
+    if (pieceColor !== gameStatus.turn) {
+      setSelectedSquare(null);
       return;
     }
 
-    event.preventDefault();
-    event.dataTransfer.dropEffect = "move";
-  };
-
-  const handleDrop = (index: number, event: React.DragEvent<HTMLButtonElement>) => {
-    event.preventDefault();
-
-    const source = dragSource ?? Number.parseInt(event.dataTransfer.getData("text/plain"), 10);
-    if (Number.isNaN(source)) {
-      return;
-    }
-
-    commitMove(source, index);
-  };
-
-  const checkSquares = new Set<number>();
-  snapshot.board.forEach((piece, index) => {
-    if (!piece || piece.kind !== "king") {
-      return;
-    }
-
-    if ((piece.color === "white" && whiteInCheck) || (piece.color === "black" && blackInCheck)) {
-      checkSquares.add(index);
-    }
-  });
+    setSelectedSquare(square);
+  }
 
   return (
     <main className="app-shell">
-      <section className="board-panel">
-        <div className="board-frame">
-          <div className="board-header">
-            <div>
-              <p className="eyebrow">Interactive board</p>
-              <h1>Drag, drop, and test checks on a responsive chessboard.</h1>
-            </div>
-            <div className="chip-row" aria-label="Board state">
-              <span className="chip">{snapshot.label}</span>
-              <span className="chip chip-contrast">{statusLine}</span>
-            </div>
+      <section className="hero-panel">
+        <div className="hero-copy">
+          <p className="eyebrow">Playable Chess Engine</p>
+          <h1>Legal move generation, special rules, and end-state detection in one board.</h1>
+          <p className="lede">
+            The starter shell is now replaced with a full game loop: every move is validated, the
+            board only exposes legal targets, and the engine surfaces check, checkmate, stalemate,
+            castling, en passant, and promotion.
+          </p>
+        </div>
+
+        <div className="hero-stats" aria-label="Game snapshot">
+          <div className={`status-card phase-${gameStatus.phase}`}>
+            <span className="status-pill">{gameStatus.phase}</span>
+            <h2>{gameStatus.headline}</h2>
+            <p>{statusDetail}</p>
           </div>
 
-          <div className="board-grid" aria-label="Chessboard">
-            {boardSquares.map((square) => {
-              const row = Math.floor(square / BOARD_SIZE);
-              const file = square % BOARD_SIZE;
-              const isLightSquare = (row + file) % 2 === 0;
-              const piece = snapshot.board[square];
-              const isSelected = interactionSquare === square;
-              const isLegalTarget = legalTargetSet.has(square);
-              const isLastFrom = lastMove?.from === square;
-              const isLastTo = lastMove?.to === square;
-              const isCheckSquare = checkSquares.has(square);
-              const fileLabel = row === BOARD_SIZE - 1 ? files[file] : "";
-              const rankLabel = file === 0 ? `${BOARD_SIZE - row}` : "";
-              const squareLabel = piece
-                ? `${indexToSquare(square)}, ${getPieceLabel(piece)}`
-                : `${indexToSquare(square)}, empty`;
-
-              return (
-                <button
-                  key={square}
-                  type="button"
-                  className={[
-                    "square",
-                    isLightSquare ? "light" : "dark",
-                    isSelected ? "square-selected" : "",
-                    isLegalTarget ? "square-target" : "",
-                    isLastFrom ? "square-last-from" : "",
-                    isLastTo ? "square-last-to" : "",
-                    isCheckSquare ? "square-check" : "",
-                  ]
-                    .filter(Boolean)
-                    .join(" ")}
-                  onClick={() => handleSquareClick(square)}
-                  onDragOver={(event) => handleDragOver(square, event)}
-                  onDrop={(event) => handleDrop(square, event)}
-                  aria-label={squareLabel}
-                  aria-pressed={isSelected}
-                >
-                  {rankLabel ? <span className="rank-label">{rankLabel}</span> : null}
-                  {fileLabel ? <span className="file-label">{fileLabel}</span> : null}
-                  {piece ? (
-                    <img
-                      className="piece"
-                      src={getPieceAsset(piece)}
-                      alt=""
-                      draggable={piece.color === snapshot.turn}
-                      onDragStart={(event) => handleDragStart(square, event)}
-                      onDragEnd={() => setDragSource(null)}
-                    />
-                  ) : null}
-                  {isLegalTarget ? <span className="move-indicator" aria-hidden="true" /> : null}
-                </button>
-              );
-            })}
+          <div className="metrics-card">
+            <div className="metric">
+              <span className="metric-label">Turn</span>
+              <strong>{toTitleCase(gameStatus.turn)}</strong>
+            </div>
+            <div className="metric">
+              <span className="metric-label">Legal moves</span>
+              <strong>{legalMoveCount}</strong>
+            </div>
+            <div className="metric">
+              <span className="metric-label">Last move</span>
+              <strong>{lastMove ? lastMove.san : "Opening position"}</strong>
+            </div>
+            <div className="metric">
+              <span className="metric-label">Move count</span>
+              <strong>{moveLog.length}</strong>
+            </div>
           </div>
         </div>
       </section>
 
-      <section className="info-panel">
-        <div className="panel-card hero-card">
-          <p className="eyebrow">Board controls</p>
-          <h2>Local move rules, check detection, and highlight states are wired in.</h2>
-          <p className="lede">
-            Drag a piece on desktop or tap a piece and a destination square on smaller screens.
-            Legal targets appear during interaction, the last move stays marked, and checked kings
-            pulse in place.
-          </p>
-          <div className="control-row">
-            <button
-              type="button"
-              className="primary-action"
-              onClick={() => resetBoard(createInitialSnapshot())}
-            >
-              Reset to start
+      <section className="experience-grid">
+        <div className="board-panel">
+          <div className="board-toolbar">
+            <div>
+              <p className="panel-label">Board</p>
+              <p className="panel-caption">
+                Click a piece to reveal legal moves. Illegal moves never become selectable.
+              </p>
+            </div>
+            <button type="button" className="secondary-button" onClick={resetGame}>
+              Reset game
             </button>
-            <button
-              type="button"
-              className="secondary-action"
-              onClick={() => resetBoard(createCheckDemoSnapshot())}
-            >
-              Load check demo
-            </button>
+          </div>
+
+          <div className="board-frame">
+            <div className="captured-strip">
+              <span>Captured from Black</span>
+              <div className="captured-row">
+                {capturedPieces.black.length > 0 ? (
+                  capturedPieces.black.map((piece, index) => (
+                    <span
+                      key={`${piece.label}-black-${index}`}
+                      className="captured-piece"
+                      aria-label={piece.label}
+                      title={piece.label}
+                    >
+                      {piece.glyph}
+                    </span>
+                  ))
+                ) : (
+                  <span className="captured-empty">None</span>
+                )}
+              </div>
+            </div>
+
+            <div className="board-grid" role="grid" aria-label="Interactive chess board">
+              {boardCells.map((cell) => {
+                const targetMoves = moveTargets.get(cell.square) ?? [];
+                const isSelected = selectedSquare === cell.square;
+                const isLegalTarget = targetMoves.length > 0;
+                const isCaptureTarget = targetMoves.some((move) => move.isCapture);
+                const isPromotionTarget = targetMoves.some((move) => move.promotion);
+                const isLastMoveSquare =
+                  lastMove?.from === cell.square || lastMove?.to === cell.square;
+                const isCheckedKing =
+                  gameStatus.inCheck &&
+                  cell.piece?.color === gameStatus.turn &&
+                  cell.piece?.type === "king";
+                const squareLabel = [
+                  `${cell.square}`,
+                  cell.piece ? cell.piece.label : "empty square",
+                  isSelected ? "selected" : null,
+                  isLegalTarget ? "legal move target" : null,
+                  isCheckedKing ? "king in check" : null,
+                ]
+                  .filter(Boolean)
+                  .join(", ");
+
+                return (
+                  <button
+                    key={cell.square}
+                    type="button"
+                    className={[
+                      "board-square",
+                      cell.isLight ? "light" : "dark",
+                      isSelected ? "selected" : "",
+                      isLegalTarget ? "target" : "",
+                      isCaptureTarget ? "capture" : "",
+                      isPromotionTarget ? "promotion" : "",
+                      isLastMoveSquare ? "last-move" : "",
+                      isCheckedKing ? "checked" : "",
+                    ]
+                      .filter(Boolean)
+                      .join(" ")}
+                    aria-label={squareLabel}
+                    onClick={() => handleSquareClick(cell.square)}
+                  >
+                    {cell.file === "a" ? <span className="rank-label">{cell.rank}</span> : null}
+                    {cell.rank === 1 ? <span className="file-label">{cell.file}</span> : null}
+                    {cell.piece ? (
+                      <span className={`piece piece-${cell.piece.color}`}>{cell.piece.glyph}</span>
+                    ) : null}
+                  </button>
+                );
+              })}
+            </div>
+
+            <div className="captured-strip">
+              <span>Captured from White</span>
+              <div className="captured-row">
+                {capturedPieces.white.length > 0 ? (
+                  capturedPieces.white.map((piece, index) => (
+                    <span
+                      key={`${piece.label}-white-${index}`}
+                      className="captured-piece"
+                      aria-label={piece.label}
+                      title={piece.label}
+                    >
+                      {piece.glyph}
+                    </span>
+                  ))
+                ) : (
+                  <span className="captured-empty">None</span>
+                )}
+              </div>
+            </div>
           </div>
         </div>
 
-        <div className="panel-card">
-          <h3>Position summary</h3>
-          <dl className="status-list">
-            <div>
-              <dt>Turn</dt>
-              <dd>{capitalize(snapshot.turn)}</dd>
-            </div>
-            <div>
-              <dt>Legal moves</dt>
-              <dd>{legalMoveCount}</dd>
-            </div>
-            <div>
-              <dt>Latest move</dt>
-              <dd>
-                {lastMove
-                  ? `${indexToSquare(lastMove.from)} -> ${indexToSquare(lastMove.to)}`
-                  : "None yet"}
-              </dd>
-            </div>
-            <div>
-              <dt>Check status</dt>
-              <dd>{checkSummary}</dd>
-            </div>
-          </dl>
-        </div>
+        <aside className="inspector-panel">
+          <div className="info-card">
+            <p className="panel-label">Special Rules</p>
+            <ul className="rule-list">
+              {SPECIAL_RULES.map((rule) => (
+                <li key={rule}>{rule}</li>
+              ))}
+            </ul>
+          </div>
 
-        <div className="panel-card">
-          <h3>Highlight legend</h3>
-          <ul className="legend-list">
-            <li>
-              <span className="legend-swatch legend-target" />
-              Valid move target
-            </li>
-            <li>
-              <span className="legend-swatch legend-last" />
-              Most recent move
-            </li>
-            <li>
-              <span className="legend-swatch legend-check" />
-              King in check
-            </li>
-          </ul>
-        </div>
+          <div className="info-card">
+            <p className="panel-label">Promotion</p>
+            {pendingPromotion ? (
+              <div className="promotion-panel">
+                <p className="promotion-copy">
+                  Promote the pawn on <strong>{pendingPromotion.to}</strong>.
+                </p>
+                <div className="promotion-grid">
+                  {PROMOTION_OPTIONS.map((piece) => (
+                    <button
+                      key={piece}
+                      type="button"
+                      className="promotion-option"
+                      onClick={() => handlePromotionChoice(piece)}
+                    >
+                      <span className="promotion-glyph">
+                        {PROMOTION_GLYPHS[gameStatus.turn][piece]}
+                      </span>
+                      <span>{toTitleCase(piece)}</span>
+                    </button>
+                  ))}
+                </div>
+              </div>
+            ) : (
+              <p className="supporting-copy">
+                Promotion choices appear here as soon as a pawn reaches the back rank.
+              </p>
+            )}
+          </div>
+
+          <div className="info-card move-log-card">
+            <div className="move-log-header">
+              <p className="panel-label">Move Log</p>
+              <span className="move-log-total">{moveLog.length} plies</span>
+            </div>
+            {moveRows.length > 0 ? (
+              <ol className="move-list">
+                {moveRows.map((row) => (
+                  <li key={row.number} className="move-row">
+                    <span className="move-number">{row.number}.</span>
+                    <span className="move-san">{row.white.san}</span>
+                    <span className="move-san">{row.black?.san ?? "..."}</span>
+                  </li>
+                ))}
+              </ol>
+            ) : (
+              <p className="supporting-copy">No moves played yet. White has the first turn.</p>
+            )}
+          </div>
+        </aside>
       </section>
     </main>
   );
-}
-
-function capitalize(value: string) {
-  return value.charAt(0).toUpperCase() + value.slice(1);
 }
 
 export default App;
