@@ -187,10 +187,12 @@ function createSession(
 }
 
 export function createFreshSession(
-  options: Partial<Pick<GameSession, "opponentMode" | "orientation" | "soundEnabled">> = {},
+  options: Partial<Pick<GameSession, "opponentMode" | "orientation" | "soundEnabled">> & {
+    startingTimeMs?: number;
+  } = {},
 ): GameSession {
   return {
-    clockState: createInitialClockState(),
+    clockState: createInitialClockState(options.startingTimeMs),
     opponentMode: options.opponentMode ?? DEFAULT_OPPONENT_MODE,
     orientation: options.orientation ?? DEFAULT_BOARD_ORIENTATION,
     soundEnabled: options.soundEnabled ?? DEFAULT_SOUND_ENABLED,
