@@ -6,19 +6,19 @@ import {
   PROMOTION_OPTIONS,
   applyMove,
   createGame,
-  getAllLegalMoves,
   getBoardCells,
-  getCapturedPieces,
   getGameStatus,
   getLegalMoves,
   getMoveTargets,
   type EngineMove,
   type GamePhase,
+  type MoveInput,
   type PlayerColor,
   type PromotionPiece,
 } from "./chess-engine";
 import { playGameSound, type GameSound } from "./game-sounds";
 import { createFreshSession, loadGameSession, persistGameSession } from "./game-session";
+import { buildGameTimelineSnapshot, gameTimelineReducer } from "./game-state";
 
 type PromotionRequest = {
   moves: EngineMove[];
@@ -68,7 +68,7 @@ function buildMoveRows(moves: EngineMove[]) {
   return rows;
 }
 
-function toMoveInput(move: EngineMove) {
+function toMoveInput(move: EngineMove): MoveInput {
   return {
     from: move.from,
     promotion: move.promotion,
@@ -107,21 +107,40 @@ function App() {
     persistGameSession(session);
   }, [session]);
 
-  const game = createGame(session.fen);
+  const {
+    canRedo,
+    canUndo,
+    capturedPieces,
+    fen,
+    futureCount,
+    game,
+    historyIndex,
+    legalMoveCount,
+    moveLog,
+    pgn,
+    status: gameStatus,
+    totalMoves,
+  } = buildGameTimelineSnapshot(session.timeline);
   const boardCells = getBoardCells(game, session.orientation);
-  const gameStatus = getGameStatus(game);
-  const capturedPieces = getCapturedPieces(game);
-  const legalMoveCount = getAllLegalMoves(game).length;
   const selectedMoves = selectedSquare ? getLegalMoves(game, selectedSquare) : [];
   const moveTargets = getMoveTargets(selectedMoves);
-  const lastMove = session.moveLog.at(-1) ?? null;
-  const moveRows = buildMoveRows(session.moveLog);
+  const lastMove = moveLog.at(-1) ?? null;
+  const moveRows = buildMoveRows(moveLog);
+  const hasMoves = historyIndex > 0;
+  const pgnPreview = pgn || "No moves played yet. White has the first turn.";
+  const timelineSummary =
+    futureCount > 0 ? `${historyIndex} active / ${totalMoves} recorded` : `${historyIndex} plies`;
   const statusDetail = pendingPromotion
     ? `${toTitleCase(gameStatus.turn)} reached ${pendingPromotion.to}. Choose a promotion piece to complete the move.`
     : gameStatus.detail;
   const canInteract = gameStatus.phase !== "checkmate" && gameStatus.phase !== "stalemate";
   const boardPerspective = getBoardPerspectiveLabel(session.orientation);
   const captureRails = getCaptureRailColors(session.orientation);
+
+  function clearTransientSelection() {
+    setPendingPromotion(null);
+    setSelectedSquare(null);
+  }
 
   function renderCapturedStrip(color: PlayerColor) {
     const pieces = capturedPieces[color];
@@ -149,24 +168,48 @@ function App() {
     );
   }
 
-  function commitMove(move: EngineMove) {
-    const nextGame = createGame(session.fen);
+  function commitMove(move: MoveInput) {
+    const nextGame = createGame(fen);
     const executed = applyMove(nextGame, move);
     const nextStatus = getGameStatus(nextGame);
 
     setSession((current) => ({
       ...current,
-      fen: nextGame.fen(),
-      history: [...current.history, toMoveInput(executed)],
-      moveLog: [...current.moveLog, executed],
+      timeline: gameTimelineReducer(current.timeline, {
+        move: toMoveInput(executed),
+        type: "commit",
+      }),
     }));
-    setPendingPromotion(null);
-    setSelectedSquare(null);
+    clearTransientSelection();
 
     void playGameSound(
       getMoveSound(executed, nextStatus.phase, nextStatus.inCheck),
       session.soundEnabled,
     );
+  }
+
+  function handleUndo() {
+    if (!canUndo) {
+      return;
+    }
+
+    setSession((current) => ({
+      ...current,
+      timeline: gameTimelineReducer(current.timeline, { type: "undo" }),
+    }));
+    clearTransientSelection();
+  }
+
+  function handleRedo() {
+    if (!canRedo) {
+      return;
+    }
+
+    setSession((current) => ({
+      ...current,
+      timeline: gameTimelineReducer(current.timeline, { type: "redo" }),
+    }));
+    clearTransientSelection();
   }
 
   function startNewGame() {
@@ -176,8 +219,7 @@ function App() {
         soundEnabled: current.soundEnabled,
       }),
     );
-    setPendingPromotion(null);
-    setSelectedSquare(null);
+    clearTransientSelection();
 
     void playGameSound("reset", session.soundEnabled);
   }
@@ -207,7 +249,7 @@ function App() {
       return;
     }
 
-    commitMove(selectedMove);
+    commitMove(toMoveInput(selectedMove));
   }
 
   function handleSquareClick(square: Square) {
@@ -228,7 +270,7 @@ function App() {
         return;
       }
 
-      commitMove(destinationMoves[0]);
+      commitMove(toMoveInput(destinationMoves[0]));
       return;
     }
 
@@ -262,8 +304,8 @@ function App() {
           <h1>Legal move generation, special rules, and end-state detection in one board.</h1>
           <p className="lede">
             The starter shell is now replaced with a full game loop: every move is validated, the
-            board only exposes legal targets, and the engine now keeps your current game,
-            perspective, and move history ready when you come back.
+            board only exposes legal targets, and PGN history, board perspective, captures, and
+            session state stay synchronized even after a reload.
           </p>
         </div>
 
@@ -289,7 +331,7 @@ function App() {
             </div>
             <div className="metric">
               <span className="metric-label">Move count</span>
-              <strong>{session.moveLog.length}</strong>
+              <strong>{historyIndex}</strong>
             </div>
           </div>
         </div>
@@ -301,11 +343,27 @@ function App() {
             <div>
               <p className="panel-label">Board</p>
               <p className="panel-caption">
-                {boardPerspective}. Click a piece to reveal legal moves. Illegal moves never become
-                selectable.
+                {boardPerspective}. Click a piece to reveal legal moves. Undo, redo, and starting
+                a new game all rebuild the live board from the active timeline.
               </p>
             </div>
-            <div className="toolbar-actions">
+            <div className="toolbar-actions" aria-label="Game controls">
+              <button
+                type="button"
+                className="secondary-button"
+                onClick={handleUndo}
+                disabled={!canUndo}
+              >
+                Undo move
+              </button>
+              <button
+                type="button"
+                className="secondary-button"
+                onClick={handleRedo}
+                disabled={!canRedo}
+              >
+                Redo move
+              </button>
               <button type="button" className="secondary-button" onClick={flipBoard}>
                 Flip board
               </button>
@@ -432,10 +490,17 @@ function App() {
 
           <div className="info-card move-log-card">
             <div className="move-log-header">
-              <p className="panel-label">Move Log</p>
-              <span className="move-log-total">{session.moveLog.length} plies</span>
+              <div>
+                <p className="panel-label">PGN Move History</p>
+                <p className="panel-caption">
+                  The current line is rendered from the active timeline cursor and stays aligned
+                  with captures, turn, and board position.
+                </p>
+              </div>
+              <span className="move-log-total">{timelineSummary}</span>
             </div>
-            {moveRows.length > 0 ? (
+            <p className="pgn-preview">{pgnPreview}</p>
+            {hasMoves ? (
               <ol className="move-list">
                 {moveRows.map((row) => (
                   <li key={row.number} className="move-row">
@@ -448,6 +513,16 @@ function App() {
             ) : (
               <p className="supporting-copy">No moves played yet. White has the first turn.</p>
             )}
+            {gameStatus.inCheck ? (
+              <p className="supporting-copy">
+                {toTitleCase(gameStatus.turn)} remains in check until a legal response is committed.
+              </p>
+            ) : null}
+            {futureCount > 0 ? (
+              <p className="supporting-copy">
+                Redo buffer available: {futureCount} future {futureCount === 1 ? "move" : "moves"}.
+              </p>
+            ) : null}
           </div>
         </aside>
       </section>

@@ -213,7 +213,7 @@ h1 {
     color 180ms ease;
 }
 
-.secondary-button:hover {
+.secondary-button:hover:not(:disabled) {
   background: rgba(247, 237, 218, 0.92);
   transform: translateY(-1px);
 }
@@ -232,6 +232,11 @@ h1 {
   border-color: rgba(62, 105, 77, 0.18);
   background: rgba(62, 105, 77, 0.12);
   color: #2f6041;
+}
+
+.secondary-button:disabled {
+  cursor: not-allowed;
+  opacity: 0.46;
 }
 
 .board-frame {
@@ -474,6 +479,17 @@ h1 {
   color: #71553b;
   font-size: 0.86rem;
   font-weight: 700;
+}
+
+.pgn-preview {
+  margin: 0;
+  padding: 14px 16px;
+  border-radius: 20px;
+  background: rgba(34, 26, 18, 0.08);
+  color: #2d2218;
+  font-family: "SFMono-Regular", "SF Mono", "Menlo", "Monaco", monospace;
+  font-size: 0.9rem;
+  line-height: 1.6;
 }
 
 .move-list {

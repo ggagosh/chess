@@ -1,16 +1,13 @@
+import { PROMOTION_OPTIONS, type BoardOrientation, type MoveInput } from "./chess-engine";
 import {
-  PROMOTION_OPTIONS,
-  STARTING_FEN,
-  applyMove,
-  createGame,
-  type BoardOrientation,
-  type EngineMove,
-  type MoveInput,
-} from "./chess-engine";
+  INITIAL_GAME_TIMELINE_STATE,
+  buildGameTimelineSnapshot,
+  type GameTimelineState,
+} from "./game-state";
 
 type StorageLike = Pick<Storage, "getItem" | "setItem">;
 
-type PersistedGameSession = {
+type PersistedGameSessionV1 = {
   fen: string;
   history: MoveInput[];
   orientation: BoardOrientation;
@@ -18,12 +15,19 @@ type PersistedGameSession = {
   version: 1;
 };
 
-export type GameSession = {
-  fen: string;
-  history: MoveInput[];
-  moveLog: EngineMove[];
+type PersistedGameSessionV2 = {
+  activeFen: string;
+  cursor: number;
+  moves: MoveInput[];
   orientation: BoardOrientation;
   soundEnabled: boolean;
+  version: 2;
+};
+
+export type GameSession = {
+  orientation: BoardOrientation;
+  soundEnabled: boolean;
+  timeline: GameTimelineState;
 };
 
 export const GAME_SESSION_STORAGE_KEY = "chess.session.v1";
@@ -61,12 +65,12 @@ function isMoveInput(value: unknown): value is MoveInput {
   );
 }
 
-function isPersistedGameSession(value: unknown): value is PersistedGameSession {
+function isPersistedGameSessionV1(value: unknown): value is PersistedGameSessionV1 {
   if (!value || typeof value !== "object") {
     return false;
   }
 
-  const candidate = value as Partial<Record<keyof PersistedGameSession, unknown>>;
+  const candidate = value as Partial<Record<keyof PersistedGameSessionV1, unknown>>;
 
   return (
     candidate.version === 1 &&
@@ -78,20 +82,40 @@ function isPersistedGameSession(value: unknown): value is PersistedGameSession {
   );
 }
 
-function buildSession(
-  history: MoveInput[],
+function isPersistedGameSessionV2(value: unknown): value is PersistedGameSessionV2 {
+  if (!value || typeof value !== "object") {
+    return false;
+  }
+
+  const candidate = value as Partial<Record<keyof PersistedGameSessionV2, unknown>>;
+
+  return (
+    candidate.version === 2 &&
+    typeof candidate.activeFen === "string" &&
+    Number.isInteger(candidate.cursor) &&
+    Array.isArray(candidate.moves) &&
+    candidate.moves.every(isMoveInput) &&
+    typeof candidate.soundEnabled === "boolean" &&
+    isBoardOrientation(candidate.orientation)
+  );
+}
+
+function createTimelineState(moves: MoveInput[], cursor = moves.length): GameTimelineState {
+  return {
+    cursor: Math.min(Math.max(cursor, 0), moves.length),
+    moves: [...moves],
+  };
+}
+
+function createSession(
+  timeline: GameTimelineState,
   orientation = DEFAULT_BOARD_ORIENTATION,
   soundEnabled = DEFAULT_SOUND_ENABLED,
 ): GameSession {
-  const game = createGame();
-  const moveLog = history.map((move) => applyMove(game, move));
-
   return {
-    fen: game.fen(),
-    history: [...history],
-    moveLog,
     orientation,
     soundEnabled,
+    timeline: createTimelineState(timeline.moves, timeline.cursor),
   };
 }
 
@@ -99,12 +123,32 @@ export function createFreshSession(
   options: Partial<Pick<GameSession, "orientation" | "soundEnabled">> = {},
 ): GameSession {
   return {
-    fen: STARTING_FEN,
-    history: [],
-    moveLog: [],
     orientation: options.orientation ?? DEFAULT_BOARD_ORIENTATION,
     soundEnabled: options.soundEnabled ?? DEFAULT_SOUND_ENABLED,
+    timeline: { ...INITIAL_GAME_TIMELINE_STATE },
   };
+}
+
+function loadLegacySession(session: PersistedGameSessionV1): GameSession {
+  const nextSession = createSession(
+    createTimelineState(session.history),
+    session.orientation,
+    session.soundEnabled,
+  );
+  const snapshot = buildGameTimelineSnapshot(nextSession.timeline);
+
+  return snapshot.fen === session.fen ? nextSession : createFreshSession();
+}
+
+function loadCurrentSession(session: PersistedGameSessionV2): GameSession {
+  const nextSession = createSession(
+    createTimelineState(session.moves, session.cursor),
+    session.orientation,
+    session.soundEnabled,
+  );
+  const snapshot = buildGameTimelineSnapshot(nextSession.timeline);
+
+  return snapshot.fen === session.activeFen ? nextSession : createFreshSession();
 }
 
 export function loadGameSession(storage?: StorageLike | null): GameSession {
@@ -123,13 +167,15 @@ export function loadGameSession(storage?: StorageLike | null): GameSession {
 
     const parsed: unknown = JSON.parse(raw);
 
-    if (!isPersistedGameSession(parsed)) {
-      return createFreshSession();
+    if (isPersistedGameSessionV2(parsed)) {
+      return loadCurrentSession(parsed);
     }
 
-    const session = buildSession(parsed.history, parsed.orientation, parsed.soundEnabled);
+    if (isPersistedGameSessionV1(parsed)) {
+      return loadLegacySession(parsed);
+    }
 
-    return session.fen === parsed.fen ? session : createFreshSession();
+    return createFreshSession();
   } catch {
     return createFreshSession();
   }
@@ -142,12 +188,14 @@ export function persistGameSession(session: GameSession, storage?: StorageLike |
     return;
   }
 
-  const payload: PersistedGameSession = {
-    fen: session.fen,
-    history: session.history,
+  const snapshot = buildGameTimelineSnapshot(session.timeline);
+  const payload: PersistedGameSessionV2 = {
+    activeFen: snapshot.fen,
+    cursor: session.timeline.cursor,
+    moves: session.timeline.moves,
     orientation: session.orientation,
     soundEnabled: session.soundEnabled,
-    version: 1,
+    version: 2,
   };
 
   try {
