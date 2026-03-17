@@ -40,6 +40,7 @@ describe("game-session", () => {
         black: 593_500,
         white: 487_250,
       },
+      opponentMode: "stockfish" as const,
       orientation: "black" as const,
       soundEnabled: false,
       timeline: {
@@ -80,6 +81,7 @@ describe("game-session", () => {
 
     expect(loadGameSession(storage)).toEqual({
       clockState: createInitialClockState(),
+      opponentMode: "human",
       orientation: "black",
       soundEnabled: true,
       timeline: {
@@ -111,10 +113,51 @@ describe("game-session", () => {
 
     expect(loadGameSession(storage)).toEqual({
       clockState: createInitialClockState(),
+      opponentMode: "human",
       orientation: "black",
       soundEnabled: false,
       timeline: {
         cursor: 1,
+        moves,
+      },
+    });
+  });
+
+  it("hydrates version 3 payloads that persist the selected opponent mode", () => {
+    const moves: MoveInput[] = [
+      { from: "e2", to: "e4" },
+      { from: "e7", to: "e5" },
+    ];
+    const active = buildGameTimelineSnapshot({
+      cursor: moves.length,
+      moves,
+    });
+    const storage = createMemoryStorage({
+      [GAME_SESSION_STORAGE_KEY]: JSON.stringify({
+        activeFen: active.fen,
+        clockState: {
+          black: 410_000,
+          white: 430_000,
+        },
+        cursor: moves.length,
+        moves,
+        opponentMode: "random",
+        orientation: "white",
+        soundEnabled: true,
+        version: 3,
+      }),
+    });
+
+    expect(loadGameSession(storage)).toEqual({
+      clockState: {
+        black: 410_000,
+        white: 430_000,
+      },
+      opponentMode: "random",
+      orientation: "white",
+      soundEnabled: true,
+      timeline: {
+        cursor: moves.length,
         moves,
       },
     });
