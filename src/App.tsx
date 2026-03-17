@@ -1,7 +1,15 @@
-import { useEffect, useState } from "react";
+import { useEffect, useEffectEvent, useRef, useState } from "react";
 import type { Square } from "chess.js";
 
 import "./App.css";
+import {
+  getOpponentModeLabel,
+  isComputerOpponentMode,
+  OPPONENT_MODE_OPTIONS,
+  resolveComputerMove,
+  type ComputerMoveSource,
+  type OpponentMode,
+} from "./computer-opponent";
 import { GameClock } from "./components/GameClock";
 import { GameResultModal } from "./components/GameResultModal";
 import { MoveHistoryPanel } from "./components/MoveHistoryPanel";
@@ -23,6 +31,7 @@ import { tickClock } from "./game-clock";
 import { playGameSound, type GameSound } from "./game-sounds";
 import { createFreshSession, loadGameSession, persistGameSession } from "./game-session";
 import { buildGameTimelineSnapshot, gameTimelineReducer } from "./game-state";
+import { cancelStockfishSearch, getStockfishBestMove } from "./stockfish-client";
 
 type PromotionRequest = {
   moves: EngineMove[];
@@ -73,11 +82,40 @@ function getMoveSound(move: EngineMove, phase: GamePhase, inCheck: boolean): Gam
   return move.isCapture || move.isEnPassant ? "capture" : "move";
 }
 
+function getComputerStatusLabel(
+  mode: OpponentMode,
+  isThinking: boolean,
+  lastSource: ComputerMoveSource | null,
+  notice: string | null,
+) {
+  if (!isComputerOpponentMode(mode)) {
+    return "Off";
+  }
+
+  if (isThinking) {
+    return mode === "stockfish" ? "Thinking" : "Choosing";
+  }
+
+  if (notice) {
+    return "Fallback";
+  }
+
+  if (mode === "stockfish" && lastSource === "stockfish") {
+    return "Ready";
+  }
+
+  return mode === "stockfish" ? "Standby" : "Random";
+}
+
 function App() {
   const [session, setSession] = useState(() => loadGameSession());
   const [selectedSquare, setSelectedSquare] = useState<Square | null>(null);
   const [pendingPromotion, setPendingPromotion] = useState<PromotionRequest | null>(null);
   const [isResultModalOpen, setIsResultModalOpen] = useState(false);
+  const [computerNotice, setComputerNotice] = useState<string | null>(null);
+  const [lastComputerSource, setLastComputerSource] = useState<ComputerMoveSource | null>(null);
+  const [isComputerThinking, setIsComputerThinking] = useState(false);
+  const computerTurnRequestId = useRef(0);
 
   const {
     canRedo,
@@ -99,6 +137,9 @@ function App() {
   const moveTargets = getMoveTargets(selectedMoves);
   const lastMove = moveLog.at(-1) ?? null;
   const isGameOver = gameStatus.phase === "checkmate" || gameStatus.phase === "stalemate";
+  const isLivePosition = futureCount === 0;
+  const isComputerMode = isComputerOpponentMode(session.opponentMode);
+  const isComputerTurn = isComputerMode && isLivePosition && gameStatus.turn === "black";
   const resultPhase: "checkmate" | "stalemate" | null =
     gameStatus.phase === "checkmate"
       ? "checkmate"
@@ -110,7 +151,9 @@ function App() {
   const pgnPreview = pgn || "No moves played yet. White has the first turn.";
   const statusDetail = pendingPromotion
     ? `${toTitleCase(gameStatus.turn)} reached ${pendingPromotion.to}. Choose a promotion piece to complete the move.`
-    : gameStatus.detail;
+    : isComputerThinking
+      ? `${toTitleCase(gameStatus.turn)} is thinking. The reply move will land automatically when the computer finishes.`
+      : gameStatus.detail;
   const gameResult = resultPhase
     ? {
         detail: gameStatus.detail,
@@ -121,10 +164,33 @@ function App() {
     : null;
   const boardPerspective = getBoardPerspectiveLabel(session.orientation);
   const captureRails = getCaptureRailColors(session.orientation);
+  const activeOpponentOption =
+    OPPONENT_MODE_OPTIONS.find((option) => option.value === session.opponentMode) ??
+    OPPONENT_MODE_OPTIONS[0];
+  const computerStatus = getComputerStatusLabel(
+    session.opponentMode,
+    isComputerThinking,
+    lastComputerSource,
+    computerNotice,
+  );
+  const boardInputLocked =
+    isGameOver || pendingPromotion !== null || isComputerThinking || isComputerTurn;
 
   useEffect(() => {
     persistGameSession(session);
   }, [session]);
+
+  useEffect(() => {
+    if (session.opponentMode === "human") {
+      setComputerNotice(null);
+      setLastComputerSource(null);
+      return;
+    }
+
+    if (session.opponentMode === "random") {
+      setComputerNotice(null);
+    }
+  }, [session.opponentMode]);
 
   useEffect(() => {
     if (isGameOver) {
@@ -162,6 +228,74 @@ function App() {
       window.clearInterval(intervalId);
     };
   }, [gameStatus.turn, isGameOver]);
+
+  const playComputerTurn = useEffectEvent(
+    async (requestId: number, sourceFen: string, mode: Exclude<OpponentMode, "human">) => {
+      setIsComputerThinking(true);
+
+      try {
+        const result = await resolveComputerMove({
+          fen: sourceFen,
+          getStockfishMove: getStockfishBestMove,
+          mode,
+        });
+
+        if (computerTurnRequestId.current !== requestId) {
+          return;
+        }
+
+        setLastComputerSource(result.source);
+        setComputerNotice(result.fallbackReason ?? null);
+        commitMove(sourceFen, result.move);
+      } catch {
+        if (computerTurnRequestId.current !== requestId) {
+          return;
+        }
+
+        setComputerNotice(
+          mode === "stockfish"
+            ? "Stockfish could not complete the turn. Switch to random mode or start a new game to keep playing."
+            : "The computer could not produce a legal move for this position.",
+        );
+      } finally {
+        if (computerTurnRequestId.current === requestId) {
+          setIsComputerThinking(false);
+        }
+      }
+    },
+  );
+
+  useEffect(() => {
+    if (!isComputerTurn || pendingPromotion !== null) {
+      return;
+    }
+
+    const requestId = computerTurnRequestId.current + 1;
+
+    computerTurnRequestId.current = requestId;
+
+    const timeoutId = window.setTimeout(
+      () => {
+        if (!isComputerOpponentMode(session.opponentMode)) {
+          return;
+        }
+
+        void playComputerTurn(requestId, fen, session.opponentMode);
+      },
+      session.opponentMode === "stockfish" ? 320 : 180,
+    );
+
+    return () => {
+      window.clearTimeout(timeoutId);
+
+      if (computerTurnRequestId.current === requestId) {
+        computerTurnRequestId.current += 1;
+      }
+
+      cancelStockfishSearch();
+      setIsComputerThinking(false);
+    };
+  }, [fen, isComputerTurn, pendingPromotion, session.opponentMode]);
 
   function clearTransientSelection() {
     setPendingPromotion(null);
@@ -204,8 +338,8 @@ function App() {
     );
   }
 
-  function commitMove(move: MoveInput) {
-    const nextGame = createGame(fen);
+  function commitMove(sourceFen: string, move: MoveInput) {
+    const nextGame = createGame(sourceFen);
     const executed = applyMove(nextGame, move);
     const nextStatus = getGameStatus(nextGame);
 
@@ -249,12 +383,18 @@ function App() {
   }
 
   function startNewGame() {
+    computerTurnRequestId.current += 1;
+    cancelStockfishSearch();
     setSession((current) =>
       createFreshSession({
+        opponentMode: current.opponentMode,
         orientation: current.orientation,
         soundEnabled: current.soundEnabled,
       }),
     );
+    setComputerNotice(null);
+    setLastComputerSource(null);
+    setIsComputerThinking(false);
     clearTransientSelection();
     setIsResultModalOpen(false);
 
@@ -286,11 +426,11 @@ function App() {
       return;
     }
 
-    commitMove(toMoveInput(selectedMove));
+    commitMove(fen, toMoveInput(selectedMove));
   }
 
   function handleSquareClick(square: Square) {
-    if (isGameOver || pendingPromotion) {
+    if (boardInputLocked) {
       return;
     }
 
@@ -307,7 +447,7 @@ function App() {
         return;
       }
 
-      commitMove(toMoveInput(destinationMoves[0]));
+      commitMove(fen, toMoveInput(destinationMoves[0]));
       return;
     }
 
@@ -333,6 +473,19 @@ function App() {
     setSelectedSquare(square);
   }
 
+  function handleOpponentModeChange(mode: OpponentMode) {
+    computerTurnRequestId.current += 1;
+    cancelStockfishSearch();
+    setSession((current) => ({
+      ...current,
+      opponentMode: mode,
+    }));
+    setComputerNotice(null);
+    setLastComputerSource(null);
+    setIsComputerThinking(false);
+    clearTransientSelection();
+  }
+
   function cancelPromotion() {
     setPendingPromotion(null);
   }
@@ -345,10 +498,10 @@ function App() {
             <p className="eyebrow">Playable Chess Engine</p>
             <h1>Board state, clocks, move history, and game endings in one play surface.</h1>
             <p className="lede">
-              The starter shell now carries the full game loop plus the supporting match UI: clocks
-              tick with the active side, promotions resolve in a focused dialog, every move lands in
-              history, and board perspective, sound, and session recovery stay synchronized through
-              the same engine timeline.
+              The starter shell now carries the full game loop plus opponent modes for solo play:
+              clocks tick with the active side, promotions resolve in a focused dialog, random and
+              Stockfish-backed replies can take over Black, and board perspective, sound, and
+              session recovery stay synchronized through the same engine timeline.
             </p>
           </div>
 
@@ -365,8 +518,16 @@ function App() {
                 <strong>{toTitleCase(gameStatus.turn)}</strong>
               </div>
               <div className="metric">
+                <span className="metric-label">Opponent</span>
+                <strong>{getOpponentModeLabel(session.opponentMode)}</strong>
+              </div>
+              <div className="metric">
                 <span className="metric-label">Legal moves</span>
                 <strong>{legalMoveCount}</strong>
+              </div>
+              <div className="metric">
+                <span className="metric-label">Computer</span>
+                <strong>{computerStatus}</strong>
               </div>
               <div className="metric">
                 <span className="metric-label">Last move</span>
@@ -383,50 +544,84 @@ function App() {
         <section className="experience-grid">
           <div className="board-panel">
             <div className="board-toolbar">
-              <div>
+              <div className="toolbar-copy">
                 <p className="panel-label">Board</p>
                 <p className="panel-caption">
                   {boardPerspective}. Click a piece to reveal legal moves. Undo, redo, and starting
                   a new game rebuild the live board from the active move timeline, and the board
-                  locks while promotion is awaiting your choice or after the game ends.
+                  locks while promotion is awaiting your choice, while the computer is thinking, or
+                  after the game ends.
                 </p>
               </div>
 
-              <div className="toolbar-actions" aria-label="Game controls">
-                <button
-                  type="button"
-                  className="secondary-button"
-                  onClick={handleUndo}
-                  disabled={!canUndo}
-                >
-                  Undo move
-                </button>
-                <button
-                  type="button"
-                  className="secondary-button"
-                  onClick={handleRedo}
-                  disabled={!canRedo}
-                >
-                  Redo move
-                </button>
-                <button type="button" className="secondary-button" onClick={flipBoard}>
-                  Flip board
-                </button>
-                <button
-                  type="button"
-                  className={`secondary-button toggle-button ${session.soundEnabled ? "is-active" : ""}`}
-                  aria-pressed={session.soundEnabled}
-                  onClick={toggleSound}
-                >
-                  {session.soundEnabled ? "Sound on" : "Sound off"}
-                </button>
-                <button
-                  type="button"
-                  className="secondary-button primary-action"
-                  onClick={startNewGame}
-                >
-                  New game
-                </button>
+              <div className="toolbar-aside">
+                <div className="opponent-control">
+                  <div className="opponent-control-header">
+                    <div>
+                      <p className="panel-label">Opponent</p>
+                      <p className="supporting-copy">
+                        {activeOpponentOption.description}
+                        {computerNotice ? ` ${computerNotice}` : ""}
+                      </p>
+                    </div>
+                    <span
+                      className={`engine-pill ${session.opponentMode === "stockfish" ? "stockfish" : ""}`}
+                    >
+                      {computerStatus}
+                    </span>
+                  </div>
+
+                  <div className="mode-switch" role="group" aria-label="Opponent mode">
+                    {OPPONENT_MODE_OPTIONS.map((option) => (
+                      <button
+                        key={option.value}
+                        type="button"
+                        className={`mode-button ${session.opponentMode === option.value ? "is-active" : ""}`}
+                        aria-pressed={session.opponentMode === option.value}
+                        onClick={() => handleOpponentModeChange(option.value)}
+                      >
+                        {option.label}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+
+                <div className="toolbar-actions" aria-label="Game controls">
+                  <button
+                    type="button"
+                    className="secondary-button"
+                    onClick={handleUndo}
+                    disabled={!canUndo}
+                  >
+                    Undo move
+                  </button>
+                  <button
+                    type="button"
+                    className="secondary-button"
+                    onClick={handleRedo}
+                    disabled={!canRedo}
+                  >
+                    Redo move
+                  </button>
+                  <button type="button" className="secondary-button" onClick={flipBoard}>
+                    Flip board
+                  </button>
+                  <button
+                    type="button"
+                    className={`secondary-button toggle-button ${session.soundEnabled ? "is-active" : ""}`}
+                    aria-pressed={session.soundEnabled}
+                    onClick={toggleSound}
+                  >
+                    {session.soundEnabled ? "Sound on" : "Sound off"}
+                  </button>
+                  <button
+                    type="button"
+                    className="secondary-button primary-action"
+                    onClick={startNewGame}
+                  >
+                    New game
+                  </button>
+                </div>
               </div>
             </div>
 
@@ -477,12 +672,15 @@ function App() {
                         .filter(Boolean)
                         .join(" ")}
                       aria-label={squareLabel}
+                      disabled={boardInputLocked}
                       onClick={() => handleSquareClick(cell.square)}
                     >
                       {shouldShowRankLabel ? <span className="rank-label">{cell.rank}</span> : null}
                       {shouldShowFileLabel ? <span className="file-label">{cell.file}</span> : null}
                       {cell.piece ? (
-                        <span className={`piece piece-${cell.piece.color}`}>{cell.piece.glyph}</span>
+                        <span className={`piece piece-${cell.piece.color}`}>
+                          {cell.piece.glyph}
+                        </span>
                       ) : null}
                     </button>
                   );

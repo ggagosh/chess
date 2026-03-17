@@ -1,4 +1,5 @@
 import { PROMOTION_OPTIONS, type BoardOrientation, type MoveInput } from "./chess-engine";
+import { DEFAULT_OPPONENT_MODE, isOpponentMode, type OpponentMode } from "./computer-opponent";
 import { createInitialClockState, type ClockState } from "./game-clock";
 import {
   INITIAL_GAME_TIMELINE_STATE,
@@ -26,8 +27,20 @@ type PersistedGameSessionV2 = {
   version: 2;
 };
 
+type PersistedGameSessionV3 = {
+  activeFen: string;
+  clockState?: ClockState;
+  cursor: number;
+  moves: MoveInput[];
+  opponentMode: OpponentMode;
+  orientation: BoardOrientation;
+  soundEnabled: boolean;
+  version: 3;
+};
+
 export type GameSession = {
   clockState: ClockState;
+  opponentMode: OpponentMode;
   orientation: BoardOrientation;
   soundEnabled: boolean;
   timeline: GameTimelineState;
@@ -104,6 +117,26 @@ function isPersistedGameSessionV2(value: unknown): value is PersistedGameSession
   );
 }
 
+function isPersistedGameSessionV3(value: unknown): value is PersistedGameSessionV3 {
+  if (!value || typeof value !== "object") {
+    return false;
+  }
+
+  const candidate = value as Partial<Record<keyof PersistedGameSessionV3, unknown>>;
+
+  return (
+    candidate.version === 3 &&
+    typeof candidate.activeFen === "string" &&
+    Number.isInteger(candidate.cursor) &&
+    Array.isArray(candidate.moves) &&
+    candidate.moves.every(isMoveInput) &&
+    (candidate.clockState === undefined || isClockState(candidate.clockState)) &&
+    typeof candidate.soundEnabled === "boolean" &&
+    isBoardOrientation(candidate.orientation) &&
+    isOpponentMode(candidate.opponentMode)
+  );
+}
+
 function isClockState(value: unknown): value is ClockState {
   if (!value || typeof value !== "object") {
     return false;
@@ -142,9 +175,11 @@ function createSession(
   orientation = DEFAULT_BOARD_ORIENTATION,
   soundEnabled = DEFAULT_SOUND_ENABLED,
   clockState?: ClockState,
+  opponentMode = DEFAULT_OPPONENT_MODE,
 ): GameSession {
   return {
     clockState: createClockState(clockState),
+    opponentMode,
     orientation,
     soundEnabled,
     timeline: createTimelineState(timeline.moves, timeline.cursor),
@@ -152,10 +187,11 @@ function createSession(
 }
 
 export function createFreshSession(
-  options: Partial<Pick<GameSession, "orientation" | "soundEnabled">> = {},
+  options: Partial<Pick<GameSession, "opponentMode" | "orientation" | "soundEnabled">> = {},
 ): GameSession {
   return {
     clockState: createInitialClockState(),
+    opponentMode: options.opponentMode ?? DEFAULT_OPPONENT_MODE,
     orientation: options.orientation ?? DEFAULT_BOARD_ORIENTATION,
     soundEnabled: options.soundEnabled ?? DEFAULT_SOUND_ENABLED,
     timeline: { ...INITIAL_GAME_TIMELINE_STATE },
@@ -185,6 +221,19 @@ function loadCurrentSession(session: PersistedGameSessionV2): GameSession {
   return snapshot.fen === session.activeFen ? nextSession : createFreshSession();
 }
 
+function loadCurrentSessionV3(session: PersistedGameSessionV3): GameSession {
+  const nextSession = createSession(
+    createTimelineState(session.moves, session.cursor),
+    session.orientation,
+    session.soundEnabled,
+    session.clockState,
+    session.opponentMode,
+  );
+  const snapshot = buildGameTimelineSnapshot(nextSession.timeline);
+
+  return snapshot.fen === session.activeFen ? nextSession : createFreshSession();
+}
+
 export function loadGameSession(storage?: StorageLike | null): GameSession {
   const target = getStorage(storage);
 
@@ -200,6 +249,10 @@ export function loadGameSession(storage?: StorageLike | null): GameSession {
     }
 
     const parsed: unknown = JSON.parse(raw);
+
+    if (isPersistedGameSessionV3(parsed)) {
+      return loadCurrentSessionV3(parsed);
+    }
 
     if (isPersistedGameSessionV2(parsed)) {
       return loadCurrentSession(parsed);
@@ -223,14 +276,15 @@ export function persistGameSession(session: GameSession, storage?: StorageLike |
   }
 
   const snapshot = buildGameTimelineSnapshot(session.timeline);
-  const payload: PersistedGameSessionV2 = {
+  const payload: PersistedGameSessionV3 = {
     activeFen: snapshot.fen,
     clockState: session.clockState,
     cursor: session.timeline.cursor,
     moves: session.timeline.moves,
+    opponentMode: session.opponentMode,
     orientation: session.orientation,
     soundEnabled: session.soundEnabled,
-    version: 2,
+    version: 3,
   };
 
   try {
