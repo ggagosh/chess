@@ -1,10 +1,9 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import type { Square } from "chess.js";
 
 import "./App.css";
 import {
   PROMOTION_OPTIONS,
-  STARTING_FEN,
   applyMove,
   createGame,
   getAllLegalMoves,
@@ -14,8 +13,12 @@ import {
   getLegalMoves,
   getMoveTargets,
   type EngineMove,
+  type GamePhase,
+  type PlayerColor,
   type PromotionPiece,
 } from "./chess-engine";
+import { playGameSound, type GameSound } from "./game-sounds";
+import { createFreshSession, loadGameSession, persistGameSession } from "./game-session";
 
 type PromotionRequest = {
   moves: EngineMove[];
@@ -65,41 +68,132 @@ function buildMoveRows(moves: EngineMove[]) {
   return rows;
 }
 
+function toMoveInput(move: EngineMove) {
+  return {
+    from: move.from,
+    promotion: move.promotion,
+    to: move.to,
+  };
+}
+
+function getBoardPerspectiveLabel(orientation: PlayerColor) {
+  return `${toTitleCase(orientation)} at bottom`;
+}
+
+function getCaptureRailColors(orientation: PlayerColor) {
+  return orientation === "white"
+    ? { bottom: "white" as const, top: "black" as const }
+    : { bottom: "black" as const, top: "white" as const };
+}
+
+function getMoveSound(move: EngineMove, phase: GamePhase, inCheck: boolean): GameSound {
+  if (phase === "checkmate" || phase === "stalemate") {
+    return "game-over";
+  }
+
+  if (inCheck) {
+    return "check";
+  }
+
+  return move.isCapture || move.isEnPassant ? "capture" : "move";
+}
+
 function App() {
-  const [fen, setFen] = useState(STARTING_FEN);
+  const [session, setSession] = useState(() => loadGameSession());
   const [selectedSquare, setSelectedSquare] = useState<Square | null>(null);
-  const [moveLog, setMoveLog] = useState<EngineMove[]>([]);
   const [pendingPromotion, setPendingPromotion] = useState<PromotionRequest | null>(null);
 
-  const game = createGame(fen);
-  const boardCells = getBoardCells(game);
+  useEffect(() => {
+    persistGameSession(session);
+  }, [session]);
+
+  const game = createGame(session.fen);
+  const boardCells = getBoardCells(game, session.orientation);
   const gameStatus = getGameStatus(game);
   const capturedPieces = getCapturedPieces(game);
   const legalMoveCount = getAllLegalMoves(game).length;
   const selectedMoves = selectedSquare ? getLegalMoves(game, selectedSquare) : [];
   const moveTargets = getMoveTargets(selectedMoves);
-  const lastMove = moveLog.at(-1) ?? null;
-  const moveRows = buildMoveRows(moveLog);
+  const lastMove = session.moveLog.at(-1) ?? null;
+  const moveRows = buildMoveRows(session.moveLog);
   const statusDetail = pendingPromotion
     ? `${toTitleCase(gameStatus.turn)} reached ${pendingPromotion.to}. Choose a promotion piece to complete the move.`
     : gameStatus.detail;
   const canInteract = gameStatus.phase !== "checkmate" && gameStatus.phase !== "stalemate";
+  const boardPerspective = getBoardPerspectiveLabel(session.orientation);
+  const captureRails = getCaptureRailColors(session.orientation);
 
-  function commitMove(move: EngineMove) {
-    const nextGame = createGame(fen);
-    const executed = applyMove(nextGame, move);
+  function renderCapturedStrip(color: PlayerColor) {
+    const pieces = capturedPieces[color];
 
-    setFen(nextGame.fen());
-    setMoveLog((current) => [...current, executed]);
-    setPendingPromotion(null);
-    setSelectedSquare(null);
+    return (
+      <div className="captured-strip">
+        <span>{`Captured from ${toTitleCase(color)}`}</span>
+        <div className="captured-row">
+          {pieces.length > 0 ? (
+            pieces.map((piece, index) => (
+              <span
+                key={`${piece.label}-${color}-${index}`}
+                className="captured-piece"
+                aria-label={piece.label}
+                title={piece.label}
+              >
+                {piece.glyph}
+              </span>
+            ))
+          ) : (
+            <span className="captured-empty">None</span>
+          )}
+        </div>
+      </div>
+    );
   }
 
-  function resetGame() {
-    setFen(STARTING_FEN);
-    setMoveLog([]);
+  function commitMove(move: EngineMove) {
+    const nextGame = createGame(session.fen);
+    const executed = applyMove(nextGame, move);
+    const nextStatus = getGameStatus(nextGame);
+
+    setSession((current) => ({
+      ...current,
+      fen: nextGame.fen(),
+      history: [...current.history, toMoveInput(executed)],
+      moveLog: [...current.moveLog, executed],
+    }));
     setPendingPromotion(null);
     setSelectedSquare(null);
+
+    void playGameSound(
+      getMoveSound(executed, nextStatus.phase, nextStatus.inCheck),
+      session.soundEnabled,
+    );
+  }
+
+  function startNewGame() {
+    setSession((current) =>
+      createFreshSession({
+        orientation: current.orientation,
+        soundEnabled: current.soundEnabled,
+      }),
+    );
+    setPendingPromotion(null);
+    setSelectedSquare(null);
+
+    void playGameSound("reset", session.soundEnabled);
+  }
+
+  function flipBoard() {
+    setSession((current) => ({
+      ...current,
+      orientation: current.orientation === "white" ? "black" : "white",
+    }));
+  }
+
+  function toggleSound() {
+    setSession((current) => ({
+      ...current,
+      soundEnabled: !current.soundEnabled,
+    }));
   }
 
   function handlePromotionChoice(piece: PromotionPiece) {
@@ -168,8 +262,8 @@ function App() {
           <h1>Legal move generation, special rules, and end-state detection in one board.</h1>
           <p className="lede">
             The starter shell is now replaced with a full game loop: every move is validated, the
-            board only exposes legal targets, and the engine surfaces check, checkmate, stalemate,
-            castling, en passant, and promotion.
+            board only exposes legal targets, and the engine now keeps your current game,
+            perspective, and move history ready when you come back.
           </p>
         </div>
 
@@ -195,7 +289,7 @@ function App() {
             </div>
             <div className="metric">
               <span className="metric-label">Move count</span>
-              <strong>{moveLog.length}</strong>
+              <strong>{session.moveLog.length}</strong>
             </div>
           </div>
         </div>
@@ -207,37 +301,37 @@ function App() {
             <div>
               <p className="panel-label">Board</p>
               <p className="panel-caption">
-                Click a piece to reveal legal moves. Illegal moves never become selectable.
+                {boardPerspective}. Click a piece to reveal legal moves. Illegal moves never become
+                selectable.
               </p>
             </div>
-            <button type="button" className="secondary-button" onClick={resetGame}>
-              Reset game
-            </button>
+            <div className="toolbar-actions">
+              <button type="button" className="secondary-button" onClick={flipBoard}>
+                Flip board
+              </button>
+              <button
+                type="button"
+                className={`secondary-button toggle-button ${session.soundEnabled ? "is-active" : ""}`}
+                aria-pressed={session.soundEnabled}
+                onClick={toggleSound}
+              >
+                {session.soundEnabled ? "Sound on" : "Sound off"}
+              </button>
+              <button
+                type="button"
+                className="secondary-button primary-action"
+                onClick={startNewGame}
+              >
+                New game
+              </button>
+            </div>
           </div>
 
           <div className="board-frame">
-            <div className="captured-strip">
-              <span>Captured from Black</span>
-              <div className="captured-row">
-                {capturedPieces.black.length > 0 ? (
-                  capturedPieces.black.map((piece, index) => (
-                    <span
-                      key={`${piece.label}-black-${index}`}
-                      className="captured-piece"
-                      aria-label={piece.label}
-                      title={piece.label}
-                    >
-                      {piece.glyph}
-                    </span>
-                  ))
-                ) : (
-                  <span className="captured-empty">None</span>
-                )}
-              </div>
-            </div>
+            {renderCapturedStrip(captureRails.top)}
 
             <div className="board-grid" role="grid" aria-label="Interactive chess board">
-              {boardCells.map((cell) => {
+              {boardCells.map((cell, index) => {
                 const targetMoves = moveTargets.get(cell.square) ?? [];
                 const isSelected = selectedSquare === cell.square;
                 const isLegalTarget = targetMoves.length > 0;
@@ -258,6 +352,10 @@ function App() {
                 ]
                   .filter(Boolean)
                   .join(", ");
+                const displayFileIndex = index % 8;
+                const displayRankIndex = Math.floor(index / 8);
+                const shouldShowRankLabel = displayFileIndex === 0;
+                const shouldShowFileLabel = displayRankIndex === 7;
 
                 return (
                   <button
@@ -278,8 +376,8 @@ function App() {
                     aria-label={squareLabel}
                     onClick={() => handleSquareClick(cell.square)}
                   >
-                    {cell.file === "a" ? <span className="rank-label">{cell.rank}</span> : null}
-                    {cell.rank === 1 ? <span className="file-label">{cell.file}</span> : null}
+                    {shouldShowRankLabel ? <span className="rank-label">{cell.rank}</span> : null}
+                    {shouldShowFileLabel ? <span className="file-label">{cell.file}</span> : null}
                     {cell.piece ? (
                       <span className={`piece piece-${cell.piece.color}`}>{cell.piece.glyph}</span>
                     ) : null}
@@ -288,25 +386,7 @@ function App() {
               })}
             </div>
 
-            <div className="captured-strip">
-              <span>Captured from White</span>
-              <div className="captured-row">
-                {capturedPieces.white.length > 0 ? (
-                  capturedPieces.white.map((piece, index) => (
-                    <span
-                      key={`${piece.label}-white-${index}`}
-                      className="captured-piece"
-                      aria-label={piece.label}
-                      title={piece.label}
-                    >
-                      {piece.glyph}
-                    </span>
-                  ))
-                ) : (
-                  <span className="captured-empty">None</span>
-                )}
-              </div>
-            </div>
+            {renderCapturedStrip(captureRails.bottom)}
           </div>
         </div>
 
@@ -353,7 +433,7 @@ function App() {
           <div className="info-card move-log-card">
             <div className="move-log-header">
               <p className="panel-label">Move Log</p>
-              <span className="move-log-total">{moveLog.length} plies</span>
+              <span className="move-log-total">{session.moveLog.length} plies</span>
             </div>
             {moveRows.length > 0 ? (
               <ol className="move-list">

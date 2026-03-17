@@ -8,6 +8,7 @@ import {
 } from "chess.js";
 
 export type PlayerColor = "white" | "black";
+export type BoardOrientation = PlayerColor;
 export type PieceType = "pawn" | "knight" | "bishop" | "rook" | "queen" | "king";
 export type PromotionPiece = Extract<PieceType, "queen" | "rook" | "bishop" | "knight">;
 export type GamePhase = "active" | "check" | "checkmate" | "stalemate";
@@ -152,8 +153,8 @@ export function createGame(fen = STARTING_FEN): Chess {
   return new Chess(fen);
 }
 
-export function getBoardCells(game: Chess): BoardCell[] {
-  return game.board().flatMap((rankRow, rankIndex) =>
+export function getBoardCells(game: Chess, orientation: BoardOrientation = "white"): BoardCell[] {
+  const cells = game.board().flatMap((rankRow, rankIndex) =>
     rankRow.map((piece, fileIndex) => {
       const rank = 8 - rankIndex;
       const file = FILES[fileIndex];
@@ -168,6 +169,8 @@ export function getBoardCells(game: Chess): BoardCell[] {
       };
     }),
   );
+
+  return orientation === "white" ? cells : [...cells].reverse();
 }
 
 export function getLegalMoves(game: Chess, square: Square): EngineMove[] {
