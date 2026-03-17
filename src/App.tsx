@@ -19,7 +19,7 @@ import {
   type PlayerColor,
   type PromotionPiece,
 } from "./chess-engine";
-import { createInitialClockState, tickClock } from "./game-clock";
+import { tickClock } from "./game-clock";
 import { playGameSound, type GameSound } from "./game-sounds";
 import { createFreshSession, loadGameSession, persistGameSession } from "./game-session";
 import { buildGameTimelineSnapshot, gameTimelineReducer } from "./game-state";
@@ -77,7 +77,6 @@ function App() {
   const [session, setSession] = useState(() => loadGameSession());
   const [selectedSquare, setSelectedSquare] = useState<Square | null>(null);
   const [pendingPromotion, setPendingPromotion] = useState<PromotionRequest | null>(null);
-  const [clockState, setClockState] = useState(createInitialClockState);
   const [isResultModalOpen, setIsResultModalOpen] = useState(false);
 
   const {
@@ -94,6 +93,7 @@ function App() {
     status: gameStatus,
     totalMoves,
   } = buildGameTimelineSnapshot(session.timeline);
+  const clockState = session.clockState;
   const boardCells = getBoardCells(game, session.orientation);
   const selectedMoves = selectedSquare ? getLegalMoves(game, selectedSquare) : [];
   const moveTargets = getMoveTargets(selectedMoves);
@@ -146,12 +146,15 @@ function App() {
       const elapsedMs = now - previousTick;
       previousTick = now;
 
-      setClockState((current) => {
-        if (current[gameStatus.turn] <= 0) {
+      setSession((current) => {
+        if (current.clockState[gameStatus.turn] <= 0) {
           return current;
         }
 
-        return tickClock(current, gameStatus.turn, elapsedMs);
+        return {
+          ...current,
+          clockState: tickClock(current.clockState, gameStatus.turn, elapsedMs),
+        };
       });
     }, 250);
 
@@ -253,7 +256,6 @@ function App() {
       }),
     );
     clearTransientSelection();
-    setClockState(createInitialClockState());
     setIsResultModalOpen(false);
 
     void playGameSound("reset", session.soundEnabled);

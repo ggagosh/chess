@@ -1,4 +1,5 @@
 import { PROMOTION_OPTIONS, type BoardOrientation, type MoveInput } from "./chess-engine";
+import { createInitialClockState, type ClockState } from "./game-clock";
 import {
   INITIAL_GAME_TIMELINE_STATE,
   buildGameTimelineSnapshot,
@@ -17,6 +18,7 @@ type PersistedGameSessionV1 = {
 
 type PersistedGameSessionV2 = {
   activeFen: string;
+  clockState?: ClockState;
   cursor: number;
   moves: MoveInput[];
   orientation: BoardOrientation;
@@ -25,6 +27,7 @@ type PersistedGameSessionV2 = {
 };
 
 export type GameSession = {
+  clockState: ClockState;
   orientation: BoardOrientation;
   soundEnabled: boolean;
   timeline: GameTimelineState;
@@ -95,9 +98,36 @@ function isPersistedGameSessionV2(value: unknown): value is PersistedGameSession
     Number.isInteger(candidate.cursor) &&
     Array.isArray(candidate.moves) &&
     candidate.moves.every(isMoveInput) &&
+    (candidate.clockState === undefined || isClockState(candidate.clockState)) &&
     typeof candidate.soundEnabled === "boolean" &&
     isBoardOrientation(candidate.orientation)
   );
+}
+
+function isClockState(value: unknown): value is ClockState {
+  if (!value || typeof value !== "object") {
+    return false;
+  }
+
+  const candidate = value as Partial<Record<keyof ClockState, unknown>>;
+
+  return (
+    typeof candidate.white === "number" &&
+    Number.isFinite(candidate.white) &&
+    typeof candidate.black === "number" &&
+    Number.isFinite(candidate.black)
+  );
+}
+
+function createClockState(clockState?: ClockState): ClockState {
+  if (!clockState) {
+    return createInitialClockState();
+  }
+
+  return {
+    black: Math.max(0, clockState.black),
+    white: Math.max(0, clockState.white),
+  };
 }
 
 function createTimelineState(moves: MoveInput[], cursor = moves.length): GameTimelineState {
@@ -111,8 +141,10 @@ function createSession(
   timeline: GameTimelineState,
   orientation = DEFAULT_BOARD_ORIENTATION,
   soundEnabled = DEFAULT_SOUND_ENABLED,
+  clockState?: ClockState,
 ): GameSession {
   return {
+    clockState: createClockState(clockState),
     orientation,
     soundEnabled,
     timeline: createTimelineState(timeline.moves, timeline.cursor),
@@ -123,6 +155,7 @@ export function createFreshSession(
   options: Partial<Pick<GameSession, "orientation" | "soundEnabled">> = {},
 ): GameSession {
   return {
+    clockState: createInitialClockState(),
     orientation: options.orientation ?? DEFAULT_BOARD_ORIENTATION,
     soundEnabled: options.soundEnabled ?? DEFAULT_SOUND_ENABLED,
     timeline: { ...INITIAL_GAME_TIMELINE_STATE },
@@ -145,6 +178,7 @@ function loadCurrentSession(session: PersistedGameSessionV2): GameSession {
     createTimelineState(session.moves, session.cursor),
     session.orientation,
     session.soundEnabled,
+    session.clockState,
   );
   const snapshot = buildGameTimelineSnapshot(nextSession.timeline);
 
@@ -191,6 +225,7 @@ export function persistGameSession(session: GameSession, storage?: StorageLike |
   const snapshot = buildGameTimelineSnapshot(session.timeline);
   const payload: PersistedGameSessionV2 = {
     activeFen: snapshot.fen,
+    clockState: session.clockState,
     cursor: session.timeline.cursor,
     moves: session.timeline.moves,
     orientation: session.orientation,
