@@ -7,11 +7,13 @@
     "dev": "vite",
     "build": "tsc -b && vite build",
     "lint": "oxlint --deny-warnings .",
+    "test": "vitest run",
     "format": "oxfmt --write src index.html package.json tsconfig.json tsconfig.app.json tsconfig.node.json vite.config.ts .oxlintrc.json .oxfmtrc.json",
     "format:check": "oxfmt --check src index.html package.json tsconfig.json tsconfig.app.json tsconfig.node.json vite.config.ts .oxlintrc.json .oxfmtrc.json",
     "preview": "vite preview"
   },
   "dependencies": {
+    "chess.js": "^1.4.0",
     "react": "^19.2.4",
     "react-dom": "^19.2.4"
   },
@@ -23,6 +25,7 @@
     "oxfmt": "^0.41.0",
     "oxlint": "^1.56.0",
     "typescript": "~5.9.3",
-    "vite": "^8.0.0"
+    "vite": "^8.0.0",
+    "vitest": "^4.1.0"
   }
 }
