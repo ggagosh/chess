@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useReducer, useState } from "react";
 import type { Square } from "chess.js";
 
 import "./App.css";
@@ -7,19 +7,19 @@ import { GameResultModal } from "./components/GameResultModal";
 import { MoveHistoryPanel } from "./components/MoveHistoryPanel";
 import { PawnPromotionDialog } from "./components/PawnPromotionDialog";
 import {
-  STARTING_FEN,
-  applyMove,
-  createGame,
-  getAllLegalMoves,
   getBoardCells,
-  getCapturedPieces,
-  getGameStatus,
   getLegalMoves,
   getMoveTargets,
   type EngineMove,
+  type MoveInput,
   type PromotionPiece,
 } from "./chess-engine";
 import { createInitialClockState, tickClock } from "./game-clock";
+import {
+  INITIAL_GAME_TIMELINE_STATE,
+  buildGameTimelineSnapshot,
+  gameTimelineReducer,
+} from "./game-state";
 
 type PromotionRequest = {
   moves: EngineMove[];
@@ -36,37 +36,59 @@ function toTitleCase(value: string) {
   return `${value[0].toUpperCase()}${value.slice(1)}`;
 }
 
-function isTerminalPhase(phase: ReturnType<typeof getGameStatus>["phase"]) {
-  return phase === "checkmate" || phase === "stalemate";
+function toMoveInput(move: EngineMove): MoveInput {
+  return {
+    from: move.from,
+    promotion: move.promotion,
+    to: move.to,
+  };
 }
 
 function App() {
-  const [fen, setFen] = useState(STARTING_FEN);
+  const [timelineState, dispatchTimeline] = useReducer(
+    gameTimelineReducer,
+    INITIAL_GAME_TIMELINE_STATE,
+  );
   const [selectedSquare, setSelectedSquare] = useState<Square | null>(null);
-  const [moveLog, setMoveLog] = useState<EngineMove[]>([]);
   const [pendingPromotion, setPendingPromotion] = useState<PromotionRequest | null>(null);
   const [clockState, setClockState] = useState(createInitialClockState);
   const [isResultModalOpen, setIsResultModalOpen] = useState(false);
 
-  const game = createGame(fen);
+  const {
+    canRedo,
+    canUndo,
+    capturedPieces,
+    futureCount,
+    game,
+    historyIndex,
+    legalMoveCount,
+    moveLog,
+    pgn,
+    status: gameStatus,
+    totalMoves,
+  } = buildGameTimelineSnapshot(timelineState);
   const boardCells = getBoardCells(game);
-  const gameStatus = getGameStatus(game);
-  const capturedPieces = getCapturedPieces(game);
-  const legalMoveCount = getAllLegalMoves(game).length;
   const selectedMoves = selectedSquare ? getLegalMoves(game, selectedSquare) : [];
   const moveTargets = getMoveTargets(selectedMoves);
   const lastMove = moveLog.at(-1) ?? null;
-  const isGameOver = isTerminalPhase(gameStatus.phase);
-  const terminalPhase: "checkmate" | "stalemate" =
-    gameStatus.phase === "checkmate" ? "checkmate" : "stalemate";
+  const isGameOver = gameStatus.phase === "checkmate" || gameStatus.phase === "stalemate";
+  const resultPhase: "checkmate" | "stalemate" | null =
+    gameStatus.phase === "checkmate"
+      ? "checkmate"
+      : gameStatus.phase === "stalemate"
+        ? "stalemate"
+        : null;
+  const timelineSummary =
+    futureCount > 0 ? `${historyIndex} active / ${totalMoves} recorded` : `${historyIndex} plies`;
+  const pgnPreview = pgn || "No moves played yet. White has the first turn.";
   const statusDetail = pendingPromotion
     ? `${toTitleCase(gameStatus.turn)} reached ${pendingPromotion.to}. Choose a promotion piece to complete the move.`
     : gameStatus.detail;
-  const gameResult = isGameOver
+  const gameResult = resultPhase
     ? {
         detail: gameStatus.detail,
         headline: gameStatus.headline,
-        phase: terminalPhase,
+        phase: resultPhase,
         winner: gameStatus.winner,
       }
     : null;
@@ -78,7 +100,7 @@ function App() {
     }
 
     setIsResultModalOpen(false);
-  }, [fen, gameStatus.phase, isGameOver]);
+  }, [historyIndex, isGameOver, gameStatus.phase]);
 
   useEffect(() => {
     if (isGameOver) {
@@ -105,23 +127,42 @@ function App() {
     };
   }, [gameStatus.turn, isGameOver]);
 
-  function commitMove(move: EngineMove) {
-    const nextGame = createGame(fen);
-    const executed = applyMove(nextGame, move);
-
-    setFen(nextGame.fen());
-    setMoveLog((current) => [...current, executed]);
+  function clearTransientSelection() {
     setPendingPromotion(null);
     setSelectedSquare(null);
   }
 
+  function commitMove(move: MoveInput) {
+    dispatchTimeline({
+      move,
+      type: "commit",
+    });
+    clearTransientSelection();
+  }
+
   function resetGame() {
-    setFen(STARTING_FEN);
-    setMoveLog([]);
-    setPendingPromotion(null);
-    setSelectedSquare(null);
+    dispatchTimeline({ type: "reset" });
+    clearTransientSelection();
     setClockState(createInitialClockState());
     setIsResultModalOpen(false);
+  }
+
+  function handleUndo() {
+    if (!canUndo) {
+      return;
+    }
+
+    dispatchTimeline({ type: "undo" });
+    clearTransientSelection();
+  }
+
+  function handleRedo() {
+    if (!canRedo) {
+      return;
+    }
+
+    dispatchTimeline({ type: "redo" });
+    clearTransientSelection();
   }
 
   function handlePromotionChoice(piece: PromotionPiece) {
@@ -135,7 +176,7 @@ function App() {
       return;
     }
 
-    commitMove(selectedMove);
+    commitMove(toMoveInput(selectedMove));
   }
 
   function handleSquareClick(square: Square) {
@@ -156,7 +197,7 @@ function App() {
         return;
       }
 
-      commitMove(destinationMoves[0]);
+      commitMove(toMoveInput(destinationMoves[0]));
       return;
     }
 
@@ -196,7 +237,8 @@ function App() {
             <p className="lede">
               The starter shell now carries the full game loop plus the supporting match UI: clocks
               tick with the active side, promotions resolve in a focused dialog, every move lands in
-              history, and completed games surface a result modal.
+              history, and turn state, PGN history, captured pieces, and undo/redo stay synchronized
+              through the same engine timeline.
             </p>
           </div>
 
@@ -222,7 +264,7 @@ function App() {
               </div>
               <div className="metric">
                 <span className="metric-label">Move count</span>
-                <strong>{moveLog.length}</strong>
+                <strong>{historyIndex}</strong>
               </div>
             </div>
           </div>
@@ -234,13 +276,33 @@ function App() {
               <div>
                 <p className="panel-label">Board</p>
                 <p className="panel-caption">
-                  Click a piece to reveal legal moves. The board locks only while promotion is
+                  Click a piece to reveal legal moves. Undo, redo, and reset all rebuild the live
+                  board from the active move timeline, and the board locks while promotion is
                   awaiting your choice or after the game ends.
                 </p>
               </div>
-              <button type="button" className="secondary-button" onClick={resetGame}>
-                Reset game
-              </button>
+
+              <div className="toolbar-actions" aria-label="Game state controls">
+                <button
+                  type="button"
+                  className="secondary-button"
+                  onClick={handleUndo}
+                  disabled={!canUndo}
+                >
+                  Undo move
+                </button>
+                <button
+                  type="button"
+                  className="secondary-button"
+                  onClick={handleRedo}
+                  disabled={!canRedo}
+                >
+                  Redo move
+                </button>
+                <button type="button" className="secondary-button" onClick={resetGame}>
+                  Reset game
+                </button>
+              </div>
             </div>
 
             <div className="board-frame">
@@ -370,7 +432,15 @@ function App() {
               </ul>
             </div>
 
-            <MoveHistoryPanel moves={moveLog} />
+            <MoveHistoryPanel
+              futureCount={futureCount}
+              historyIndex={historyIndex}
+              inCheck={gameStatus.inCheck}
+              moves={moveLog}
+              pgn={pgnPreview}
+              timelineSummary={timelineSummary}
+              turnLabel={toTitleCase(gameStatus.turn)}
+            />
           </aside>
         </section>
       </main>
@@ -386,7 +456,7 @@ function App() {
       <GameResultModal
         isOpen={isResultModalOpen}
         lastMove={lastMove}
-        moveCount={moveLog.length}
+        moveCount={historyIndex}
         onClose={() => setIsResultModalOpen(false)}
         onReset={resetGame}
         result={gameResult}

@@ -180,6 +180,13 @@ h1 {
   align-items: flex-start;
 }
 
+.toolbar-actions {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 10px;
+}
+
 .panel-caption {
   margin-top: 8px;
 }
@@ -204,7 +211,8 @@ h1 {
   transition:
     transform 180ms ease,
     background 180ms ease,
-    color 180ms ease;
+    color 180ms ease,
+    opacity 180ms ease;
 }
 
 .secondary-button {
@@ -212,9 +220,14 @@ h1 {
   color: #f8f1e3;
 }
 
-.secondary-button:hover {
+.secondary-button:hover:not(:disabled) {
   background: #2f4a37;
   transform: translateY(-1px);
+}
+
+.secondary-button:disabled {
+  cursor: not-allowed;
+  opacity: 0.46;
 }
 
 .ghost-button {
@@ -521,6 +534,17 @@ h1 {
   font-weight: 700;
 }
 
+.pgn-preview {
+  margin: 0;
+  padding: 14px 16px;
+  border-radius: 20px;
+  background: rgba(34, 26, 18, 0.08);
+  color: #2d2218;
+  font-family: "SFMono-Regular", "SF Mono", "Menlo", "Monaco", monospace;
+  font-size: 0.9rem;
+  line-height: 1.6;
+}
+
 .move-list {
   list-style: none;
   display: grid;
@@ -702,6 +726,10 @@ h1 {
   .dialog-actions {
     flex-direction: column;
     align-items: flex-start;
+  }
+
+  .toolbar-actions {
+    justify-content: flex-start;
   }
 
   .side-rack {
