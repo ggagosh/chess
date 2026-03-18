@@ -1,4 +1,4 @@
-import { useEffect, useRef } from "react";
+import { useEffect, useRef, useState } from "react";
 
 import type { EngineMove } from "../chess-engine";
 
@@ -62,8 +62,11 @@ export function MoveHistoryPanel({
   turnLabel,
 }: MoveHistoryPanelProps) {
   const listRef = useRef<HTMLOListElement | null>(null);
+  const currentMoveRef = useRef<HTMLSpanElement | null>(null);
+  const previousHistoryIndex = useRef(historyIndex);
+  const [flashPlyIndex, setFlashPlyIndex] = useState<number | null>(null);
   const moveRows = buildMoveRows(moves);
-  const lastPlyIndex = moves.length - 1;
+  const currentPlyIndex = historyIndex > 0 ? historyIndex - 1 : null;
 
   useEffect(() => {
     const list = listRef.current;
@@ -72,8 +75,37 @@ export function MoveHistoryPanel({
       return;
     }
 
-    list.scrollTo({ top: list.scrollHeight, behavior: "smooth" });
-  }, [moves.length]);
+    if (currentMoveRef.current) {
+      currentMoveRef.current.scrollIntoView({
+        behavior: "smooth",
+        block: "nearest",
+        inline: "nearest",
+      });
+      return;
+    }
+
+    list.scrollTo({ top: 0, behavior: "smooth" });
+  }, [currentPlyIndex, historyIndex]);
+
+  useEffect(() => {
+    const previous = previousHistoryIndex.current;
+
+    previousHistoryIndex.current = historyIndex;
+
+    if (historyIndex <= previous || currentPlyIndex === null) {
+      return;
+    }
+
+    setFlashPlyIndex(currentPlyIndex);
+
+    const timeoutId = window.setTimeout(() => {
+      setFlashPlyIndex((current) => (current === currentPlyIndex ? null : current));
+    }, 900);
+
+    return () => {
+      window.clearTimeout(timeoutId);
+    };
+  }, [currentPlyIndex, historyIndex]);
 
   return (
     <section className="info-card move-history-panel">
@@ -89,16 +121,30 @@ export function MoveHistoryPanel({
       <p className="pgn-preview">{pgn}</p>
 
       {moveRows.length > 0 ? (
-        <ol ref={listRef} className="move-list">
+        <ol ref={listRef} className="move-list" aria-label="Move history">
           {moveRows.map((row, rowIndex) => {
             const whitePlyIndex = rowIndex * 2;
             const blackPlyIndex = whitePlyIndex + 1;
+            const isCurrentWhiteMove = currentPlyIndex === whitePlyIndex;
+            const isCurrentBlackMove = currentPlyIndex === blackPlyIndex;
+            const isCurrentRow = isCurrentWhiteMove || isCurrentBlackMove;
+            const isFlashRow = flashPlyIndex === whitePlyIndex || flashPlyIndex === blackPlyIndex;
 
             return (
-              <li key={row.number} className="move-row">
+              <li
+                key={row.number}
+                className={[
+                  "move-row",
+                  isCurrentRow ? "current-row" : "",
+                  isFlashRow ? "flash-row" : "",
+                ]
+                  .filter(Boolean)
+                  .join(" ")}
+              >
                 <span className="move-number">{row.number}.</span>
                 <span
-                  className={["move-san", lastPlyIndex === whitePlyIndex ? "current" : ""]
+                  ref={isCurrentWhiteMove ? currentMoveRef : null}
+                  className={["move-san", isCurrentWhiteMove ? "current" : ""]
                     .filter(Boolean)
                     .join(" ")}
                   title={buildMoveTitle(row.white)}
@@ -106,7 +152,8 @@ export function MoveHistoryPanel({
                   {row.white.san}
                 </span>
                 <span
-                  className={["move-san", lastPlyIndex === blackPlyIndex ? "current" : ""]
+                  ref={isCurrentBlackMove ? currentMoveRef : null}
+                  className={["move-san", isCurrentBlackMove ? "current" : ""]
                     .filter(Boolean)
                     .join(" ")}
                   title={row.black ? buildMoveTitle(row.black) : "Black has not moved yet."}
