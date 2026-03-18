@@ -17,11 +17,13 @@ import {
   getMoveTargets,
   type EngineMove,
   type GamePhase,
+  type GameStatus,
   type MoveInput,
   type PlayerColor,
   type PromotionPiece,
+  toMoveInput,
 } from "../chess-engine";
-import { tickClock } from "../game-clock";
+import { tickClock, type ClockState } from "../game-clock";
 import { playGameSound, type GameSound } from "../game-sounds";
 import { createFreshSession, type GameSession } from "../game-session";
 import { timeControlMinutesToMs, type TimeControlMinutes } from "../game-setup";
@@ -39,7 +41,20 @@ type PromotionRequest = {
 
 type SessionUpdate = GameSession | ((current: GameSession) => GameSession);
 
+type OnlineMovePayload = {
+  clockState: ClockState;
+  move: EngineMove;
+  nextStatus: GameStatus;
+};
+
+type OnlineGameOptions = {
+  connectionLabel: string;
+  onMove: (payload: OnlineMovePayload) => Promise<void>;
+  sessionCode: string;
+};
+
 type GameScreenProps = {
+  onlineGame?: OnlineGameOptions;
   onReturnToSetup: () => void;
   onSessionChange: (update: SessionUpdate) => void;
   playerColor: PlayerColor;
@@ -49,14 +64,6 @@ type GameScreenProps = {
 
 function toTitleCase(value: string) {
   return `${value[0].toUpperCase()}${value.slice(1)}`;
-}
-
-function toMoveInput(move: EngineMove): MoveInput {
-  return {
-    from: move.from,
-    promotion: move.promotion,
-    to: move.to,
-  };
 }
 
 function getBoardPerspectiveLabel(orientation: PlayerColor) {
@@ -111,6 +118,7 @@ function getComputerStatusLabel(
 }
 
 export function GameScreen({
+  onlineGame,
   onReturnToSetup,
   onSessionChange,
   playerColor,
@@ -123,10 +131,14 @@ export function GameScreen({
   const [computerNotice, setComputerNotice] = useState<string | null>(null);
   const [lastComputerSource, setLastComputerSource] = useState<ComputerMoveSource | null>(null);
   const [isComputerThinking, setIsComputerThinking] = useState(false);
+  const [onlineSyncError, setOnlineSyncError] = useState<string | null>(null);
+  const [isOnlineMovePending, setIsOnlineMovePending] = useState(false);
   const computerTurnRequestId = useRef(0);
+  const lastObservedOnlineMoveCount = useRef<number | null>(null);
   const updateSession = useEffectEvent((update: SessionUpdate) => {
     onSessionChange(update);
   });
+  const isOnlineGame = onlineGame !== undefined;
   const computerColor: PlayerColor = playerColor === "white" ? "black" : "white";
 
   const {
@@ -157,15 +169,24 @@ export function GameScreen({
       : gameStatus.phase === "stalemate"
         ? "stalemate"
         : null;
-  const timelineSummary =
-    futureCount > 0 ? `${historyIndex} active / ${totalMoves} recorded` : `${historyIndex} plies`;
+  const timelineSummary = isOnlineGame
+    ? `${historyIndex} synced plies`
+    : futureCount > 0
+      ? `${historyIndex} active / ${totalMoves} recorded`
+      : `${historyIndex} plies`;
   const pgnPreview = pgn || "No moves played yet. White has the first turn.";
   const statusDetail =
     pendingPromotion !== null
       ? `Choose a piece for ${pendingPromotion.to}.`
-      : isComputerThinking
-        ? `${toTitleCase(gameStatus.turn)} is thinking.`
-        : null;
+      : isOnlineMovePending
+        ? "Syncing move…"
+        : isOnlineGame
+          ? gameStatus.turn === playerColor
+            ? "Your move."
+            : "Waiting for opponent move."
+          : isComputerThinking
+            ? `${toTitleCase(gameStatus.turn)} is thinking.`
+            : null;
   const gameResult = resultPhase
     ? {
         detail: gameStatus.detail,
@@ -179,14 +200,22 @@ export function GameScreen({
   const activeOpponentOption =
     OPPONENT_MODE_OPTIONS.find((option) => option.value === session.opponentMode) ??
     OPPONENT_MODE_OPTIONS[0];
+  const opponentSummaryLabel = isOnlineGame ? "Match" : "Opponent";
+  const opponentSummaryValue = isOnlineGame ? onlineGame.sessionCode : activeOpponentOption.label;
   const computerStatus = getComputerStatusLabel(
     session.opponentMode,
     isComputerThinking,
     lastComputerSource,
     computerNotice,
   );
+  const toolbarNotice = isOnlineGame ? onlineSyncError : computerNotice;
   const boardInputLocked =
-    isGameOver || pendingPromotion !== null || isComputerThinking || isComputerTurn;
+    isGameOver ||
+    pendingPromotion !== null ||
+    isComputerThinking ||
+    isComputerTurn ||
+    isOnlineMovePending ||
+    (isOnlineGame && gameStatus.turn !== playerColor);
 
   useEffect(() => {
     if (session.opponentMode === "human") {
@@ -199,6 +228,48 @@ export function GameScreen({
       setComputerNotice(null);
     }
   }, [session.opponentMode]);
+
+  useEffect(() => {
+    if (!isOnlineGame) {
+      setOnlineSyncError(null);
+      setIsOnlineMovePending(false);
+      lastObservedOnlineMoveCount.current = null;
+      return;
+    }
+
+    if (lastObservedOnlineMoveCount.current === null) {
+      lastObservedOnlineMoveCount.current = historyIndex;
+      return;
+    }
+
+    if (historyIndex > lastObservedOnlineMoveCount.current) {
+      const syncedMove = moveLog.at(-1);
+
+      if (syncedMove) {
+        void playGameSound(
+          getMoveSound(syncedMove, gameStatus.phase, gameStatus.inCheck),
+          session.soundEnabled,
+        );
+      }
+    }
+
+    lastObservedOnlineMoveCount.current = historyIndex;
+  }, [
+    gameStatus.inCheck,
+    gameStatus.phase,
+    historyIndex,
+    isOnlineGame,
+    moveLog,
+    session.soundEnabled,
+  ]);
+
+  useEffect(() => {
+    if (!isOnlineGame) {
+      return;
+    }
+
+    setOnlineSyncError(null);
+  }, [historyIndex, isOnlineGame]);
 
   useEffect(() => {
     if (isGameOver) {
@@ -237,10 +308,30 @@ export function GameScreen({
     };
   }, [gameStatus.turn, isGameOver]);
 
-  const commitMove = useEffectEvent((sourceFen: string, move: MoveInput) => {
+  const commitMove = useEffectEvent(async (sourceFen: string, move: MoveInput) => {
     const nextGame = createGame(sourceFen);
     const executed = applyMove(nextGame, move);
     const nextStatus = getGameStatus(nextGame);
+
+    if (isOnlineGame && onlineGame) {
+      clearTransientSelection();
+      setIsOnlineMovePending(true);
+      setOnlineSyncError(null);
+
+      try {
+        await onlineGame.onMove({
+          clockState: session.clockState,
+          move: executed,
+          nextStatus,
+        });
+      } catch {
+        setOnlineSyncError("Move sync failed. Wait for the connection to recover and try again.");
+      } finally {
+        setIsOnlineMovePending(false);
+      }
+
+      return;
+    }
 
     updateSession((current) => ({
       ...current,
@@ -391,6 +482,11 @@ export function GameScreen({
   }
 
   function restartCurrentGame() {
+    if (isOnlineGame) {
+      returnToStartScreen();
+      return;
+    }
+
     computerTurnRequestId.current += 1;
     cancelStockfishSearch();
     updateSession((current) =>
@@ -538,57 +634,74 @@ export function GameScreen({
                   <strong>{historyIndex}</strong>
                 </span>
                 <span className="status-chip">
-                  <span className="status-chip-label">Opponent</span>
-                  <strong>{activeOpponentOption.label}</strong>
+                  <span className="status-chip-label">{opponentSummaryLabel}</span>
+                  <strong>{opponentSummaryValue}</strong>
                 </span>
               </div>
             </div>
 
             <div className="board-toolbar">
               <div className="toolbar-meta">
-                <label className="compact-field">
-                  <span className="compact-label">Opponent</span>
-                  <select
-                    aria-label="Opponent mode"
-                    className="toolbar-select"
-                    onChange={(event) =>
-                      handleOpponentModeChange(event.target.value as OpponentMode)
-                    }
-                    value={session.opponentMode}
-                  >
-                    {OPPONENT_MODE_OPTIONS.map((option) => (
-                      <option key={option.value} value={option.value}>
-                        {option.label}
-                      </option>
-                    ))}
-                  </select>
-                </label>
+                {isOnlineGame ? (
+                  <div className="toolbar-context">
+                    <span className="toolbar-note">{boardPerspective}</span>
+                    <span className="toolbar-note">
+                      You are {playerColor === "white" ? "White" : "Black"}
+                    </span>
+                    <span className="toolbar-note">Session {onlineGame.sessionCode}</span>
+                    <span className="toolbar-note">{onlineGame.connectionLabel}</span>
+                  </div>
+                ) : (
+                  <>
+                    <label className="compact-field">
+                      <span className="compact-label">Opponent</span>
+                      <select
+                        aria-label="Opponent mode"
+                        className="toolbar-select"
+                        onChange={(event) =>
+                          handleOpponentModeChange(event.target.value as OpponentMode)
+                        }
+                        value={session.opponentMode}
+                      >
+                        {OPPONENT_MODE_OPTIONS.map((option) => (
+                          <option key={option.value} value={option.value}>
+                            {option.label}
+                          </option>
+                        ))}
+                      </select>
+                    </label>
 
-                <div className="toolbar-context">
-                  <span className="toolbar-note">{boardPerspective}</span>
-                  <span className="toolbar-note">{computerStatus}</span>
-                </div>
+                    <div className="toolbar-context">
+                      <span className="toolbar-note">{boardPerspective}</span>
+                      <span className="toolbar-note">{computerStatus}</span>
+                    </div>
+                  </>
+                )}
 
-                {computerNotice ? <p className="toolbar-notice">{computerNotice}</p> : null}
+                {toolbarNotice ? <p className="toolbar-notice">{toolbarNotice}</p> : null}
               </div>
 
               <div className="toolbar-actions" aria-label="Game controls">
-                <button
-                  type="button"
-                  className="secondary-button"
-                  onClick={handleUndo}
-                  disabled={!canUndo}
-                >
-                  Undo move
-                </button>
-                <button
-                  type="button"
-                  className="secondary-button"
-                  onClick={handleRedo}
-                  disabled={!canRedo}
-                >
-                  Redo move
-                </button>
+                {!isOnlineGame ? (
+                  <>
+                    <button
+                      type="button"
+                      className="secondary-button"
+                      onClick={handleUndo}
+                      disabled={!canUndo}
+                    >
+                      Undo move
+                    </button>
+                    <button
+                      type="button"
+                      className="secondary-button"
+                      onClick={handleRedo}
+                      disabled={!canRedo}
+                    >
+                      Redo move
+                    </button>
+                  </>
+                ) : null}
                 <button type="button" className="secondary-button" onClick={flipBoard}>
                   Flip board
                 </button>
@@ -703,7 +816,7 @@ export function GameScreen({
         lastMove={lastMove}
         moveCount={historyIndex}
         onClose={() => setIsResultModalOpen(false)}
-        onReset={restartCurrentGame}
+        onReset={isOnlineGame ? returnToStartScreen : restartCurrentGame}
         result={gameResult}
       />
     </>

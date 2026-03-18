@@ -146,6 +146,14 @@ function normalizeMove(move: Move): EngineMove {
   };
 }
 
+export function toMoveInput(move: Pick<EngineMove, "from" | "promotion" | "to">): MoveInput {
+  return {
+    from: move.from,
+    promotion: move.promotion,
+    to: move.to,
+  };
+}
+
 export const STARTING_FEN = DEFAULT_POSITION;
 export const PROMOTION_OPTIONS: readonly PromotionPiece[] = ["queen", "rook", "bishop", "knight"];
 
@@ -204,6 +212,12 @@ export function applyMove(game: Chess, move: MoveInput): EngineMove {
     promotion: move.promotion ? PROMOTION_SYMBOLS[move.promotion] : undefined,
     to: move.to,
   });
+
+  return normalizeMove(executed);
+}
+
+export function applySanMove(game: Chess, san: string): EngineMove {
+  const executed = game.move(san);
 
   return normalizeMove(executed);
 }
