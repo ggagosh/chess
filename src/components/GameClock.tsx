@@ -49,6 +49,14 @@ export function GameClock({
 }: GameClockProps) {
   const progress = `${Math.max(0, Math.min(100, (timeRemainingMs / DEFAULT_CLOCK_MS) * 100))}%`;
   const isCritical = timeRemainingMs <= 60_000;
+  const accessibleLabel = `${label ?? playerName(player)} clock, ${formatClockTime(timeRemainingMs)}, ${buildStatusLabel(
+    {
+      isActive,
+      isGameOver,
+      isInCheck,
+      isPaused,
+    },
+  )}`;
 
   return (
     <div
@@ -60,6 +68,8 @@ export function GameClock({
       ]
         .filter(Boolean)
         .join(" ")}
+      aria-label={accessibleLabel}
+      role="timer"
       style={{ "--clock-progress": progress } as CSSProperties}
     >
       <div className="clock-copy">
@@ -68,9 +78,7 @@ export function GameClock({
           {buildStatusLabel({ isActive, isGameOver, isInCheck, isPaused })}
         </span>
       </div>
-      <strong className="clock-face" aria-live={isActive && !isGameOver ? "polite" : "off"}>
-        {formatClockTime(timeRemainingMs)}
-      </strong>
+      <strong className="clock-face">{formatClockTime(timeRemainingMs)}</strong>
       <span className="clock-track" aria-hidden="true">
         <span className="clock-track-fill" />
       </span>
