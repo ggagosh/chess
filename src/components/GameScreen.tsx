@@ -2,7 +2,6 @@ import { useEffect, useEffectEvent, useRef, useState } from "react";
 import type { Square } from "chess.js";
 
 import {
-  getOpponentModeLabel,
   isComputerOpponentMode,
   OPPONENT_MODE_OPTIONS,
   resolveComputerMove,
@@ -47,12 +46,6 @@ type GameScreenProps = {
   session: GameSession;
   timeControlMinutes: TimeControlMinutes;
 };
-
-const SPECIAL_RULES = [
-  "Castling rights are unlocked only when the king and rook stay unmoved, the path is clear, and the king never crosses check.",
-  "En passant appears only on the immediately following turn after a two-square pawn advance.",
-  "Promotion now pauses board input until you choose queen, rook, bishop, or knight.",
-];
 
 function toTitleCase(value: string) {
   return `${value[0].toUpperCase()}${value.slice(1)}`;
@@ -144,7 +137,6 @@ export function GameScreen({
     futureCount,
     game,
     historyIndex,
-    legalMoveCount,
     moveLog,
     pgn,
     status: gameStatus,
@@ -168,11 +160,12 @@ export function GameScreen({
   const timelineSummary =
     futureCount > 0 ? `${historyIndex} active / ${totalMoves} recorded` : `${historyIndex} plies`;
   const pgnPreview = pgn || "No moves played yet. White has the first turn.";
-  const statusDetail = pendingPromotion
-    ? `${toTitleCase(gameStatus.turn)} reached ${pendingPromotion.to}. Choose a promotion piece to complete the move.`
-    : isComputerThinking
-      ? `${toTitleCase(gameStatus.turn)} is thinking. The reply move will land automatically when the computer finishes.`
-      : gameStatus.detail;
+  const statusDetail =
+    pendingPromotion !== null
+      ? `Choose a piece for ${pendingPromotion.to}.`
+      : isComputerThinking
+        ? `${toTitleCase(gameStatus.turn)} is thinking.`
+        : null;
   const gameResult = resultPhase
     ? {
         detail: gameStatus.detail,
@@ -522,134 +515,98 @@ export function GameScreen({
   return (
     <>
       <main className="app-shell">
-        <section className="hero-panel">
-          <div className="hero-copy">
-            <p className="eyebrow">Playable Chess Engine</p>
-            <h1>Board state, clocks, move history, and game endings in one play surface.</h1>
-            <p className="lede">
-              The starter shell now carries the full game loop plus opponent modes for solo play:
-              clocks tick with the active side, promotions resolve in a focused dialog, random and
-              Stockfish-backed replies can take over either color, and board perspective, sound, and
-              session recovery stay synchronized through the same engine timeline.
-            </p>
-          </div>
-
-          <div className="hero-stats" aria-label="Game snapshot">
-            <div className={`status-card phase-${gameStatus.phase}`}>
-              <span className="status-pill">{gameStatus.phase}</span>
-              <h2>{gameStatus.headline}</h2>
-              <p>{statusDetail}</p>
-            </div>
-
-            <div className="metrics-card">
-              <div className="metric">
-                <span className="metric-label">Turn</span>
-                <strong>{toTitleCase(gameStatus.turn)}</strong>
-              </div>
-              <div className="metric">
-                <span className="metric-label">Opponent</span>
-                <strong>{getOpponentModeLabel(session.opponentMode)}</strong>
-              </div>
-              <div className="metric">
-                <span className="metric-label">Legal moves</span>
-                <strong>{legalMoveCount}</strong>
-              </div>
-              <div className="metric">
-                <span className="metric-label">Computer</span>
-                <strong>{computerStatus}</strong>
-              </div>
-              <div className="metric">
-                <span className="metric-label">Last move</span>
-                <strong>{lastMove ? lastMove.san : "Opening position"}</strong>
-              </div>
-              <div className="metric">
-                <span className="metric-label">Move count</span>
-                <strong>{historyIndex}</strong>
-              </div>
-            </div>
-          </div>
-        </section>
-
         <section className="experience-grid">
           <div className="board-panel">
-            <div className="board-toolbar">
-              <div className="toolbar-copy">
-                <p className="panel-label">Board</p>
-                <p className="panel-caption">
-                  {boardPerspective}. Click a piece to reveal legal moves. Undo and redo rebuild the
-                  live board from the active move timeline, and the board locks while promotion is
-                  awaiting your choice, while the computer is thinking, or after the game ends.
-                </p>
+            <div className={`game-status-strip phase-${gameStatus.phase}`}>
+              <div className="status-strip-primary">
+                <span className="status-pill">{gameStatus.phase}</span>
+                <div className="status-strip-copy">
+                  <strong className="status-strip-headline">{gameStatus.headline}</strong>
+                  {statusDetail ? (
+                    <span className="status-strip-detail">{statusDetail}</span>
+                  ) : null}
+                </div>
               </div>
 
-              <div className="toolbar-aside">
-                <div className="opponent-control">
-                  <div className="opponent-control-header">
-                    <div>
-                      <p className="panel-label">Opponent</p>
-                      <p className="supporting-copy">
-                        {activeOpponentOption.description}
-                        {computerNotice ? ` ${computerNotice}` : ""}
-                      </p>
-                    </div>
-                    <span
-                      className={`engine-pill ${session.opponentMode === "stockfish" ? "stockfish" : ""}`}
-                    >
-                      {computerStatus}
-                    </span>
-                  </div>
+              <div className="status-strip-metrics" aria-label="Game snapshot">
+                <span className="status-chip">
+                  <span className="status-chip-label">Turn</span>
+                  <strong>{toTitleCase(gameStatus.turn)}</strong>
+                </span>
+                <span className="status-chip">
+                  <span className="status-chip-label">Move count</span>
+                  <strong>{historyIndex}</strong>
+                </span>
+                <span className="status-chip">
+                  <span className="status-chip-label">Opponent</span>
+                  <strong>{activeOpponentOption.label}</strong>
+                </span>
+              </div>
+            </div>
 
-                  <div className="mode-switch" role="group" aria-label="Opponent mode">
+            <div className="board-toolbar">
+              <div className="toolbar-meta">
+                <label className="compact-field">
+                  <span className="compact-label">Opponent</span>
+                  <select
+                    aria-label="Opponent mode"
+                    className="toolbar-select"
+                    onChange={(event) =>
+                      handleOpponentModeChange(event.target.value as OpponentMode)
+                    }
+                    value={session.opponentMode}
+                  >
                     {OPPONENT_MODE_OPTIONS.map((option) => (
-                      <button
-                        key={option.value}
-                        type="button"
-                        className={`mode-button ${session.opponentMode === option.value ? "is-active" : ""}`}
-                        aria-pressed={session.opponentMode === option.value}
-                        onClick={() => handleOpponentModeChange(option.value)}
-                      >
+                      <option key={option.value} value={option.value}>
                         {option.label}
-                      </button>
+                      </option>
                     ))}
-                  </div>
+                  </select>
+                </label>
+
+                <div className="toolbar-context">
+                  <span className="toolbar-note">{boardPerspective}</span>
+                  <span className="toolbar-note">{computerStatus}</span>
                 </div>
 
-                <div className="toolbar-actions" aria-label="Game controls">
-                  <button
-                    type="button"
-                    className="secondary-button"
-                    onClick={handleUndo}
-                    disabled={!canUndo}
-                  >
-                    Undo move
-                  </button>
-                  <button
-                    type="button"
-                    className="secondary-button"
-                    onClick={handleRedo}
-                    disabled={!canRedo}
-                  >
-                    Redo move
-                  </button>
-                  <button type="button" className="secondary-button" onClick={flipBoard}>
-                    Flip board
-                  </button>
-                  <button
-                    type="button"
-                    className={`secondary-button toggle-button ${session.soundEnabled ? "is-active" : ""}`}
-                    aria-pressed={session.soundEnabled}
-                    onClick={toggleSound}
-                  >
-                    {session.soundEnabled ? "Sound on" : "Sound off"}
-                  </button>
-                  <button
-                    type="button"
-                    className="secondary-button primary-action"
-                    onClick={returnToStartScreen}
-                  >
-                    New Game
-                  </button>
-                </div>
+                {computerNotice ? <p className="toolbar-notice">{computerNotice}</p> : null}
+              </div>
+
+              <div className="toolbar-actions" aria-label="Game controls">
+                <button
+                  type="button"
+                  className="secondary-button"
+                  onClick={handleUndo}
+                  disabled={!canUndo}
+                >
+                  Undo move
+                </button>
+                <button
+                  type="button"
+                  className="secondary-button"
+                  onClick={handleRedo}
+                  disabled={!canRedo}
+                >
+                  Redo move
+                </button>
+                <button type="button" className="secondary-button" onClick={flipBoard}>
+                  Flip board
+                </button>
+                <button
+                  type="button"
+                  className={`secondary-button toggle-button ${session.soundEnabled ? "is-active" : ""}`}
+                  aria-pressed={session.soundEnabled}
+                  onClick={toggleSound}
+                >
+                  {session.soundEnabled ? "Sound on" : "Sound off"}
+                </button>
+                <button
+                  type="button"
+                  className="secondary-button primary-action"
+                  onClick={returnToStartScreen}
+                >
+                  New Game
+                </button>
               </div>
             </div>
 
@@ -719,16 +676,7 @@ export function GameScreen({
             </div>
           </div>
 
-          <aside className="inspector-panel">
-            <div className="info-card">
-              <p className="panel-label">Special Rules</p>
-              <ul className="rule-list">
-                {SPECIAL_RULES.map((rule) => (
-                  <li key={rule}>{rule}</li>
-                ))}
-              </ul>
-            </div>
-
+          <aside className="inspector-panel move-history-sidebar">
             <MoveHistoryPanel
               futureCount={futureCount}
               historyIndex={historyIndex}
