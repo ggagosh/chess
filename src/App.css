@@ -187,6 +187,12 @@ h1 {
   gap: 16px;
 }
 
+.play-path-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 16px;
+}
+
 .setup-header {
   grid-template-columns: minmax(0, 1fr) auto;
   align-items: end;
@@ -200,6 +206,20 @@ h1 {
 
 .setup-header-actions {
   justify-items: end;
+}
+
+.play-path-card,
+.online-actions,
+.online-join-form,
+.local-setup-header,
+.waiting-panel,
+.waiting-code-card {
+  display: grid;
+  gap: 14px;
+}
+
+.play-path-card {
+  align-content: start;
 }
 
 .setup-title {
@@ -234,6 +254,62 @@ h1 {
   padding: 20px;
   border-radius: 28px;
   background: rgba(34, 26, 18, 0.05);
+}
+
+.local-setup-header {
+  align-items: end;
+}
+
+.inline-field-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  align-items: center;
+}
+
+.text-input {
+  min-width: 0;
+  flex: 1 1 240px;
+  min-height: 48px;
+  padding: 0 16px;
+  border: 1px solid rgba(67, 50, 30, 0.12);
+  border-radius: 18px;
+  background: rgba(255, 249, 239, 0.88);
+  color: #2f251a;
+  font: inherit;
+  font-weight: 600;
+}
+
+.text-input::placeholder {
+  color: #9a836c;
+}
+
+.text-input:focus-visible {
+  outline: 2px solid rgba(61, 94, 70, 0.28);
+  outline-offset: 2px;
+}
+
+.start-screen-notice {
+  min-height: 1.5rem;
+}
+
+.waiting-panel {
+  gap: 18px;
+}
+
+.waiting-code-card {
+  padding: 20px 22px;
+  border-radius: 28px;
+  background:
+    linear-gradient(135deg, rgba(61, 94, 70, 0.12), rgba(255, 242, 211, 0.42)),
+    rgba(255, 249, 239, 0.88);
+}
+
+.waiting-code-card strong {
+  color: #243b2d;
+  font-size: clamp(2rem, 4.4vw, 3rem);
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
 }
 
 .setting-grid {
@@ -1016,6 +1092,10 @@ h1 {
     width: 100%;
   }
 
+  .play-path-grid {
+    grid-template-columns: 1fr;
+  }
+
   .status-strip-metrics,
   .setup-header-actions {
     justify-content: flex-start;
@@ -1063,6 +1143,7 @@ h1 {
   }
 
   .metrics-card,
+  .play-path-grid,
   .setting-grid,
   .promotion-grid,
   .result-grid {
@@ -1071,6 +1152,15 @@ h1 {
 
   .setup-summary-strip {
     flex-direction: column;
+  }
+
+  .inline-field-row {
+    flex-direction: column;
+    align-items: stretch;
+  }
+
+  .inline-field-row .secondary-button {
+    width: 100%;
   }
 
   .move-row {

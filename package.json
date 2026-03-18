@@ -13,6 +13,7 @@
     "preview": "vite preview"
   },
   "dependencies": {
+    "@instantdb/react": "^0.22.164",
     "chess.js": "^1.4.0",
     "react": "^19.2.4",
     "react-dom": "^19.2.4",
