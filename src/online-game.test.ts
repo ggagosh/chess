@@ -1,12 +1,17 @@
 import { describe, expect, it } from "vitest";
 
 import {
+  ONLINE_STALE_GAME_TIMEOUT_MS,
   ONLINE_PLAYER_STORAGE_KEY,
   ONLINE_SESSION_STORAGE_KEY,
   buildOnlineGameSession,
   canJoinOnlineGame,
   createOnlineGamePayload,
   createSessionCode,
+  getOnlineGameUpdatedAt,
+  getOnlinePlayerAlias,
+  isOnlineOpponentConnected,
+  isStaleOnlineGame,
   loadOnlineSession,
   loadOrCreateOnlinePlayerId,
   normalizeSessionCode,
@@ -44,6 +49,7 @@ function createGame(overrides: Partial<OnlineGameRecord> = {}): OnlineGameRecord
     result: null,
     status: "waiting",
     timeControl: 300,
+    updatedAt: 10,
     whitePlayerId: "white-player",
     whiteTimeRemaining: 300_000,
     ...overrides,
@@ -58,6 +64,11 @@ describe("online-game", () => {
 
   it("creates a short human-friendly session code", () => {
     expect(createSessionCode(() => 0)).toBe("BISHOP-1000");
+  });
+
+  it("derives a stable funny alias from the player id", () => {
+    expect(getOnlinePlayerAlias("player-1")).toBe(getOnlinePlayerAlias("player-1"));
+    expect(getOnlinePlayerAlias("player-1")).not.toBe(getOnlinePlayerAlias("player-2"));
   });
 
   it("creates and persists a stable anonymous player id", () => {
@@ -130,9 +141,71 @@ describe("online-game", () => {
       result: null,
       status: "waiting",
       timeControl: 300,
+      updatedAt: expect.any(Number),
       whitePlayerId: "white-player",
       whiteTimeRemaining: 300_000,
     });
+  });
+
+  it("falls back to createdAt when older games do not yet have updatedAt", () => {
+    expect(
+      getOnlineGameUpdatedAt(
+        createGame({
+          createdAt: 42,
+          updatedAt: undefined,
+        }),
+      ),
+    ).toBe(42);
+  });
+
+  it("detects when the current opponent still has a live presence peer", () => {
+    expect(
+      isOnlineOpponentConnected(
+        {
+          "peer-1": {
+            playerId: "white-player",
+            status: "online",
+          },
+        },
+        "white-player",
+      ),
+    ).toBe(true);
+
+    expect(
+      isOnlineOpponentConnected(
+        {
+          "peer-1": {
+            playerId: "white-player",
+            status: "offline",
+          },
+        },
+        "white-player",
+      ),
+    ).toBe(false);
+
+    expect(isOnlineOpponentConnected({}, "white-player")).toBe(false);
+  });
+
+  it("marks long-idle active games as stale for abandonment cleanup", () => {
+    expect(
+      isStaleOnlineGame(
+        createGame({
+          status: "active",
+          updatedAt: 1_000,
+        }),
+        1_000 + ONLINE_STALE_GAME_TIMEOUT_MS - 1,
+      ),
+    ).toBe(false);
+
+    expect(
+      isStaleOnlineGame(
+        createGame({
+          status: "active",
+          updatedAt: 1_000,
+        }),
+        1_000 + ONLINE_STALE_GAME_TIMEOUT_MS,
+      ),
+    ).toBe(true);
   });
 
   it("rebuilds a playable local session from SAN move history and stored clocks", () => {

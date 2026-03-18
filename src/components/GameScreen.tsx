@@ -23,14 +23,15 @@ import {
   type PromotionPiece,
   toMoveInput,
 } from "../chess-engine";
-import { tickClock, type ClockState } from "../game-clock";
+import { formatClockTime, tickClock, type ClockState } from "../game-clock";
 import { playGameSound, type GameSound } from "../game-sounds";
 import { createFreshSession, type GameSession } from "../game-session";
 import { timeControlMinutesToMs, type TimeControlMinutes } from "../game-setup";
 import { buildGameTimelineSnapshot, gameTimelineReducer } from "../game-state";
+import type { OnlineGameResult } from "../online-game";
 import { cancelStockfishSearch, getStockfishBestMove } from "../stockfish-client";
 import { GameClock } from "./GameClock";
-import { GameResultModal } from "./GameResultModal";
+import { GameResultModal, type ResultState } from "./GameResultModal";
 import { MoveHistoryPanel } from "./MoveHistoryPanel";
 import { PawnPromotionDialog } from "./PawnPromotionDialog";
 
@@ -47,9 +48,24 @@ type OnlineMovePayload = {
   nextStatus: GameStatus;
 };
 
+type OnlineDisconnectBanner = {
+  canClaimWin: boolean;
+  countdownMs: number;
+  isPending: boolean;
+  onClaimWin: () => void;
+  onKeepWaiting: () => void;
+  opponentLabel: string;
+};
+
 type OnlineGameOptions = {
+  actionError: string | null;
+  completedResult: OnlineGameResult;
   connectionLabel: string;
+  disconnectBanner: OnlineDisconnectBanner | null;
   onMove: (payload: OnlineMovePayload) => Promise<void>;
+  opponentConnected: boolean;
+  pauseClockOnOpponentTurn: boolean;
+  playerLabels: Record<PlayerColor, string>;
   sessionCode: string;
 };
 
@@ -117,6 +133,54 @@ function getComputerStatusLabel(
   return mode === "stockfish" ? "Standby" : "Random";
 }
 
+function buildOnlineCompletionResult(
+  completedResult: OnlineGameResult,
+  playerColor: PlayerColor,
+  playerLabels: Record<PlayerColor, string>,
+): ResultState | null {
+  if (completedResult === null) {
+    return null;
+  }
+
+  if (completedResult === "abandoned") {
+    return {
+      detail: "Nobody returned to this online match for 24 hours, so it was closed as abandoned.",
+      headline: "Match abandoned",
+      phase: "abandoned",
+      winner: null,
+    };
+  }
+
+  if (completedResult === "draw" || completedResult === "stalemate") {
+    return {
+      detail:
+        completedResult === "draw"
+          ? "Both players agreed to a draw."
+          : "Neither side has a legal move, so the game ends in stalemate.",
+      headline: completedResult === "draw" ? "Draw" : "Stalemate",
+      phase: completedResult === "draw" ? "draw" : "stalemate",
+      winner: null,
+    };
+  }
+
+  const losingColor = completedResult === "white" ? "black" : "white";
+  const winningLabel = playerLabels[completedResult];
+  const losingLabel = playerLabels[losingColor];
+
+  return {
+    detail:
+      completedResult === playerColor
+        ? `${losingLabel} stayed disconnected past the timer, so the match was awarded to you.`
+        : `${winningLabel} claimed the win after ${losingLabel} stayed disconnected past the timer.`,
+    headline:
+      completedResult === playerColor
+        ? "You win by disconnect"
+        : `${winningLabel} wins by disconnect`,
+    phase: "disconnect",
+    winner: completedResult,
+  };
+}
+
 export function GameScreen({
   onlineGame,
   onReturnToSetup,
@@ -159,16 +223,33 @@ export function GameScreen({
   const selectedMoves = selectedSquare ? getLegalMoves(game, selectedSquare) : [];
   const moveTargets = getMoveTargets(selectedMoves);
   const lastMove = moveLog.at(-1) ?? null;
-  const isGameOver = gameStatus.phase === "checkmate" || gameStatus.phase === "stalemate";
   const isLivePosition = futureCount === 0;
   const isComputerMode = isComputerOpponentMode(session.opponentMode);
   const isComputerTurn = isComputerMode && isLivePosition && gameStatus.turn === computerColor;
-  const resultPhase: "checkmate" | "stalemate" | null =
-    gameStatus.phase === "checkmate"
-      ? "checkmate"
-      : gameStatus.phase === "stalemate"
-        ? "stalemate"
-        : null;
+  const boardResult =
+    gameStatus.phase === "checkmate" || gameStatus.phase === "stalemate"
+      ? {
+          detail: gameStatus.detail,
+          headline: gameStatus.headline,
+          phase: gameStatus.phase,
+          winner: gameStatus.winner,
+        }
+      : null;
+  const onlineCompletionResult =
+    isOnlineGame && onlineGame
+      ? buildOnlineCompletionResult(
+          boardResult ? null : onlineGame.completedResult,
+          playerColor,
+          onlineGame.playerLabels,
+        )
+      : null;
+  const gameResult = boardResult ?? onlineCompletionResult;
+  const isGameOver = gameResult !== null;
+  const pausedOnlineTurn =
+    isOnlineGame &&
+    onlineGame &&
+    onlineGame.pauseClockOnOpponentTurn &&
+    gameStatus.turn !== playerColor;
   const timelineSummary = isOnlineGame
     ? `${historyIndex} synced plies`
     : futureCount > 0
@@ -180,6 +261,8 @@ export function GameScreen({
       ? `Choose a piece for ${pendingPromotion.to}.`
       : isOnlineMovePending
         ? "Syncing move…"
+        : gameResult
+          ? gameResult.detail
         : isOnlineGame
           ? gameStatus.turn === playerColor
             ? "Your move."
@@ -187,16 +270,10 @@ export function GameScreen({
           : isComputerThinking
             ? `${toTitleCase(gameStatus.turn)} is thinking.`
             : null;
-  const gameResult = resultPhase
-    ? {
-        detail: gameStatus.detail,
-        headline: gameStatus.headline,
-        phase: resultPhase,
-        winner: gameStatus.winner,
-      }
-    : null;
   const boardPerspective = getBoardPerspectiveLabel(session.orientation);
   const captureRails = getCaptureRailColors(session.orientation);
+  const displayStatusHeadline = gameResult ? gameResult.headline : gameStatus.headline;
+  const displayStatusPhase = gameResult ? gameResult.phase : gameStatus.phase;
   const activeOpponentOption =
     OPPONENT_MODE_OPTIONS.find((option) => option.value === session.opponentMode) ??
     OPPONENT_MODE_OPTIONS[0];
@@ -208,7 +285,9 @@ export function GameScreen({
     lastComputerSource,
     computerNotice,
   );
-  const toolbarNotice = isOnlineGame ? onlineSyncError : computerNotice;
+  const toolbarNotice = isOnlineGame
+    ? onlineSyncError ?? onlineGame?.actionError ?? null
+    : computerNotice;
   const boardInputLocked =
     isGameOver ||
     pendingPromotion !== null ||
@@ -281,7 +360,7 @@ export function GameScreen({
   }, [historyIndex, isGameOver, gameStatus.phase]);
 
   useEffect(() => {
-    if (isGameOver) {
+    if (isGameOver || pausedOnlineTurn) {
       return;
     }
 
@@ -306,7 +385,7 @@ export function GameScreen({
     return () => {
       window.clearInterval(intervalId);
     };
-  }, [gameStatus.turn, isGameOver]);
+  }, [gameStatus.turn, isGameOver, pausedOnlineTurn]);
 
   const commitMove = useEffectEvent(async (sourceFen: string, move: MoveInput) => {
     const nextGame = createGame(sourceFen);
@@ -423,17 +502,21 @@ export function GameScreen({
 
   function renderSideRack(color: PlayerColor) {
     const pieces = capturedPieces[color];
+    const isPaused = pausedOnlineTurn && gameStatus.turn === color;
+    const label = isOnlineGame && onlineGame ? onlineGame.playerLabels[color] : toTitleCase(color);
 
     return (
       <div className="side-rack">
         <div className="side-rack-copy">
-          <span className="side-rack-player">{toTitleCase(color)}</span>
+          <span className="side-rack-player">{label}</span>
           <span className="side-rack-caption">{getCaptureCaption(color)}</span>
         </div>
         <GameClock
-          isActive={!isGameOver && gameStatus.turn === color}
+          isActive={!isPaused && !isGameOver && gameStatus.turn === color}
           isGameOver={isGameOver}
           isInCheck={!isGameOver && gameStatus.turn === color && gameStatus.inCheck}
+          isPaused={isPaused}
+          label={label}
           player={color}
           timeRemainingMs={clockState[color]}
         />
@@ -613,11 +696,11 @@ export function GameScreen({
       <main className="app-shell">
         <section className="experience-grid">
           <div className="board-panel">
-            <div className={`game-status-strip phase-${gameStatus.phase}`}>
+            <div className={`game-status-strip phase-${displayStatusPhase}`}>
               <div className="status-strip-primary">
-                <span className="status-pill">{gameStatus.phase}</span>
+                <span className="status-pill">{displayStatusPhase}</span>
                 <div className="status-strip-copy">
-                  <strong className="status-strip-headline">{gameStatus.headline}</strong>
+                  <strong className="status-strip-headline">{displayStatusHeadline}</strong>
                   {statusDetail ? (
                     <span className="status-strip-detail">{statusDetail}</span>
                   ) : null}
@@ -645,11 +728,17 @@ export function GameScreen({
                 {isOnlineGame ? (
                   <div className="toolbar-context">
                     <span className="toolbar-note">{boardPerspective}</span>
+                    <span className="toolbar-note">{onlineGame.playerLabels[playerColor]}</span>
                     <span className="toolbar-note">
-                      You are {playerColor === "white" ? "White" : "Black"}
+                      Rival {onlineGame.playerLabels[playerColor === "white" ? "black" : "white"]}
                     </span>
                     <span className="toolbar-note">Session {onlineGame.sessionCode}</span>
                     <span className="toolbar-note">{onlineGame.connectionLabel}</span>
+                    <span
+                      className={`toolbar-note presence-note ${onlineGame.opponentConnected ? "is-online" : "is-offline"}`}
+                    >
+                      {onlineGame.opponentConnected ? "Opponent connected" : "Opponent disconnected"}
+                    </span>
                   </div>
                 ) : (
                   <>
@@ -722,6 +811,51 @@ export function GameScreen({
                 </button>
               </div>
             </div>
+
+            {isOnlineGame && onlineGame.disconnectBanner ? (
+              <div
+                className={`disconnect-banner ${onlineGame.disconnectBanner.canClaimWin ? "is-expired" : ""}`}
+                aria-live="polite"
+                role="status"
+              >
+                <div className="disconnect-banner-copy">
+                  <span className="disconnect-banner-kicker">Connection</span>
+                  <strong>{onlineGame.disconnectBanner.opponentLabel} disconnected</strong>
+                  <span>
+                    {onlineGame.disconnectBanner.canClaimWin
+                      ? "The timer expired. Claim the win or keep waiting for a reconnect."
+                      : `Waiting ${formatClockTime(onlineGame.disconnectBanner.countdownMs)} for them to return.`}
+                  </span>
+                </div>
+
+                <div className="disconnect-banner-actions">
+                  {onlineGame.disconnectBanner.canClaimWin ? (
+                    <>
+                      <button
+                        type="button"
+                        className="secondary-button primary-action"
+                        disabled={onlineGame.disconnectBanner.isPending}
+                        onClick={onlineGame.disconnectBanner.onClaimWin}
+                      >
+                        {onlineGame.disconnectBanner.isPending ? "Working..." : "Claim win"}
+                      </button>
+                      <button
+                        type="button"
+                        className="secondary-button"
+                        disabled={onlineGame.disconnectBanner.isPending}
+                        onClick={onlineGame.disconnectBanner.onKeepWaiting}
+                      >
+                        Keep waiting
+                      </button>
+                    </>
+                  ) : (
+                    <span className="disconnect-banner-chip">
+                      {formatClockTime(onlineGame.disconnectBanner.countdownMs)} left
+                    </span>
+                  )}
+                </div>
+              </div>
+            ) : null}
 
             <div className="board-frame">
               {renderSideRack(captureRails.top)}

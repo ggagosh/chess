@@ -1,9 +1,15 @@
 import type { EngineMove, GamePhase, PlayerColor } from "../chess-engine";
 
-type ResultState = {
+export type GameResultPhase =
+  | "abandoned"
+  | "disconnect"
+  | "draw"
+  | Extract<GamePhase, "checkmate" | "stalemate">;
+
+export type ResultState = {
   detail: string;
   headline: string;
-  phase: Extract<GamePhase, "checkmate" | "stalemate">;
+  phase: GameResultPhase;
   winner: PlayerColor | null;
 };
 
@@ -21,6 +27,10 @@ function playerName(player: PlayerColor) {
 }
 
 function buildOutcome(result: ResultState) {
+  if (result.phase === "abandoned") {
+    return "Abandoned";
+  }
+
   if (result.winner) {
     return `${playerName(result.winner)} wins`;
   }
