@@ -16,7 +16,12 @@ type PersistedOnlineSessionV1 = {
 };
 
 export type OnlineGameStatus = "waiting" | "active" | "completed";
-export type OnlineGameResult = PlayerColor | "draw" | "stalemate" | null;
+export type OnlineGameResult = PlayerColor | "abandoned" | "draw" | "stalemate" | null;
+
+export const ONLINE_ABANDONMENT_TIMEOUT_MS = 60_000;
+export const ONLINE_DISCONNECT_DEBOUNCE_MS = 4_000;
+export const ONLINE_ROOM_TYPE = "game";
+export const ONLINE_STALE_GAME_TIMEOUT_MS = 24 * 60 * 60 * 1_000;
 
 export type OnlineGameRecord = {
   blackPlayerId: string | null;
@@ -28,6 +33,7 @@ export type OnlineGameRecord = {
   result: OnlineGameResult;
   status: OnlineGameStatus;
   timeControl: number;
+  updatedAt?: number;
   whitePlayerId: string;
   whiteTimeRemaining: number;
 };
@@ -52,6 +58,38 @@ const SESSION_CODE_WORDS = [
   "tempo",
 ] as const;
 
+const ONLINE_ALIAS_GIVEN_NAMES = [
+  "Arwen",
+  "Bilbo",
+  "Chewie",
+  "Frodo",
+  "Gimli",
+  "Han",
+  "Leia",
+  "Lando",
+  "Merry",
+  "Obi",
+  "Pippin",
+  "Rey",
+  "Samwise",
+  "Yoda",
+] as const;
+
+const ONLINE_ALIAS_FAMILY_NAMES = [
+  "Baggins",
+  "Brandybuck",
+  "Gamgee",
+  "Greenleaf",
+  "Kenobi",
+  "Organa",
+  "Ren",
+  "Skywalker",
+  "Solo",
+  "Took",
+  "Wookiee",
+  "Wormtongue",
+] as const;
+
 export const ONLINE_PLAYER_STORAGE_KEY = "chess.online-player.v1";
 export const ONLINE_SESSION_STORAGE_KEY = "chess.online-session.v1";
 
@@ -74,6 +112,7 @@ function isOnlineGameStatus(value: unknown): value is OnlineGameStatus {
 function isOnlineGameResult(value: unknown): value is OnlineGameResult {
   return (
     value === null ||
+    value === "abandoned" ||
     value === "white" ||
     value === "black" ||
     value === "draw" ||
@@ -101,6 +140,16 @@ function clampClock(value: number) {
   return Number.isFinite(value) ? Math.max(0, value) : 0;
 }
 
+function hashValue(value: string) {
+  let hash = 0;
+
+  for (const character of value) {
+    hash = (hash * 31 + character.charCodeAt(0)) >>> 0;
+  }
+
+  return hash;
+}
+
 function createRandomId() {
   if (typeof crypto !== "undefined" && "randomUUID" in crypto) {
     return crypto.randomUUID();
@@ -123,6 +172,19 @@ export function createSessionCode(random: () => number = Math.random) {
   const number = 1000 + Math.floor(random() * 9000);
 
   return `${word}-${number}`.toUpperCase();
+}
+
+export function getOnlinePlayerAlias(playerId: string) {
+  const hash = hashValue(playerId);
+  const givenName =
+    ONLINE_ALIAS_GIVEN_NAMES[hash % ONLINE_ALIAS_GIVEN_NAMES.length] ??
+    ONLINE_ALIAS_GIVEN_NAMES[0];
+  const familyName =
+    ONLINE_ALIAS_FAMILY_NAMES[
+      Math.floor(hash / ONLINE_ALIAS_GIVEN_NAMES.length) % ONLINE_ALIAS_FAMILY_NAMES.length
+    ] ?? ONLINE_ALIAS_FAMILY_NAMES[0];
+
+  return `${givenName} ${familyName}`;
 }
 
 export function loadOrCreateOnlinePlayerId(storage?: StorageLike | null) {
@@ -225,8 +287,13 @@ export function isOnlineGameRecord(value: unknown): value is OnlineGameRecord {
     typeof candidate.blackTimeRemaining === "number" &&
     typeof candidate.timeControl === "number" &&
     typeof candidate.createdAt === "number" &&
+    (candidate.updatedAt === undefined || typeof candidate.updatedAt === "number") &&
     isOnlineGameResult(candidate.result)
   );
+}
+
+export function getOnlineGameUpdatedAt(game: OnlineGameRecord) {
+  return typeof game.updatedAt === "number" ? game.updatedAt : game.createdAt;
 }
 
 export function selectOnlineGameByCode(games: unknown, code: string): OnlineGameRecord | null {
@@ -263,22 +330,45 @@ export function canJoinOnlineGame(game: OnlineGameRecord, playerId: string) {
   return game.status === "waiting" && !game.blackPlayerId && game.whitePlayerId !== playerId;
 }
 
+export function isOnlineOpponentConnected(
+  peers: Record<string, { playerId?: string; status?: string }>,
+  opponentPlayerId: string | null,
+) {
+  if (!opponentPlayerId) {
+    return false;
+  }
+
+  return Object.values(peers).some(
+    (peer) => peer.playerId === opponentPlayerId && peer.status === "online",
+  );
+}
+
+export function isStaleOnlineGame(
+  game: OnlineGameRecord,
+  now: number = Date.now(),
+  staleAfterMs: number = ONLINE_STALE_GAME_TIMEOUT_MS,
+) {
+  return game.status === "active" && now - getOnlineGameUpdatedAt(game) >= staleAfterMs;
+}
+
 export function createOnlineGamePayload(
   code: string,
   playerId: string,
   timeControlSeconds: number,
 ) {
   const startingTimeMs = Math.max(0, timeControlSeconds) * 1000;
+  const now = Date.now();
 
   return {
     blackPlayerId: null,
     blackTimeRemaining: startingTimeMs,
     code: normalizeSessionCode(code),
-    createdAt: Date.now(),
+    createdAt: now,
     moves: [] as string[],
     result: null as OnlineGameResult,
     status: "waiting" as const,
     timeControl: Math.max(0, timeControlSeconds),
+    updatedAt: now,
     whitePlayerId: playerId,
     whiteTimeRemaining: startingTimeMs,
   };

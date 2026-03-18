@@ -7,6 +7,8 @@ type GameClockProps = {
   isActive: boolean;
   isGameOver: boolean;
   isInCheck: boolean;
+  isPaused?: boolean;
+  label?: string;
   player: PlayerColor;
   timeRemainingMs: number;
 };
@@ -19,9 +21,14 @@ function buildStatusLabel({
   isActive,
   isGameOver,
   isInCheck,
-}: Pick<GameClockProps, "isActive" | "isGameOver" | "isInCheck">) {
+  isPaused,
+}: Pick<GameClockProps, "isActive" | "isGameOver" | "isInCheck" | "isPaused">) {
   if (isGameOver) {
     return "Clock stopped";
+  }
+
+  if (isPaused) {
+    return "Paused";
   }
 
   if (isInCheck) {
@@ -35,6 +42,8 @@ export function GameClock({
   isActive,
   isGameOver,
   isInCheck,
+  isPaused = false,
+  label,
   player,
   timeRemainingMs,
 }: GameClockProps) {
@@ -54,9 +63,9 @@ export function GameClock({
       style={{ "--clock-progress": progress } as CSSProperties}
     >
       <div className="clock-copy">
-        <span className="clock-player">{playerName(player)}</span>
+        <span className="clock-player">{label ?? playerName(player)}</span>
         <span className="clock-status">
-          {buildStatusLabel({ isActive, isGameOver, isInCheck })}
+          {buildStatusLabel({ isActive, isGameOver, isInCheck, isPaused })}
         </span>
       </div>
       <strong className="clock-face" aria-live={isActive && !isGameOver ? "polite" : "off"}>

@@ -1,5 +1,5 @@
 import { id } from "@instantdb/react";
-import { useEffect, useEffectEvent, useMemo, useState } from "react";
+import { useEffect, useEffectEvent, useMemo, useRef, useState } from "react";
 
 import "./App.css";
 import {
@@ -17,10 +17,16 @@ import type { GameSession } from "./game-session";
 import { timeControlMinutesToMs } from "./game-setup";
 import { instantDb } from "./instant-db";
 import {
+  ONLINE_ABANDONMENT_TIMEOUT_MS,
+  ONLINE_DISCONNECT_DEBOUNCE_MS,
+  ONLINE_ROOM_TYPE,
   buildOnlineGameSession,
   canJoinOnlineGame,
   createOnlineGamePayload,
   createSessionCode,
+  getOnlinePlayerAlias,
+  isOnlineOpponentConnected,
+  isStaleOnlineGame,
   loadOnlineSession,
   loadOrCreateOnlinePlayerId,
   normalizeSessionCode,
@@ -136,8 +142,32 @@ function App() {
     sessionCode: null as string | null,
     soundEnabled: appSession.gameSession.soundEnabled,
   }));
+  const [disconnectActionError, setDisconnectActionError] = useState<string | null>(null);
+  const [disconnectDeadlineAt, setDisconnectDeadlineAt] = useState<number | null>(null);
+  const [disconnectNow, setDisconnectNow] = useState(() => Date.now());
+  const [isDisconnectActionPending, setIsDisconnectActionPending] = useState(false);
+  const [opponentMissingSince, setOpponentMissingSince] = useState<number | null>(null);
+  const staleGameResolutionKeys = useRef(new Set<string>());
   const anonymousPlayerId = useMemo(() => loadOrCreateOnlinePlayerId(), []);
   const onlineConnectionStatus = instantDb.useConnectionStatus();
+  const onlineRoom = useMemo(
+    () => instantDb.room(ONLINE_ROOM_TYPE, onlineSession?.gameCode ?? "__offline__"),
+    [onlineSession?.gameCode],
+  );
+  const { peers: onlinePeers } = onlineRoom.usePresence(
+    onlineSession
+      ? {
+          initialPresence: {
+            playerId: onlineSession.playerId,
+            status: "online",
+          },
+          keys: ["playerId", "status"],
+        }
+      : {
+          peers: [],
+          user: false,
+        },
+  );
   const onlineQuery = useMemo(
     () =>
       onlineSession
@@ -165,6 +195,42 @@ function App() {
     liveOnlineGame && onlineSession
       ? resolveOnlinePlayerColor(liveOnlineGame, onlineSession.playerId)
       : null;
+  const opponentPlayerId =
+    liveOnlineGame && onlinePlayerColor
+      ? onlinePlayerColor === "white"
+        ? liveOnlineGame.blackPlayerId
+        : liveOnlineGame.whitePlayerId
+      : null;
+  const onlineAliases = liveOnlineGame
+    ? {
+        black:
+          liveOnlineGame.blackPlayerId === null
+            ? "Awaiting Rival"
+            : getOnlinePlayerAlias(liveOnlineGame.blackPlayerId),
+        white: getOnlinePlayerAlias(liveOnlineGame.whitePlayerId),
+      }
+    : null;
+  const onlinePlayerLabels = onlineAliases
+    ? {
+        black: `${onlineAliases.black} · Black`,
+        white: `${onlineAliases.white} · White`,
+      }
+    : null;
+  const opponentAlias =
+    onlinePlayerColor && onlineAliases
+      ? onlinePlayerColor === "white"
+        ? onlineAliases.black
+        : onlineAliases.white
+      : "Opponent";
+  const shouldTrackOpponentPresence =
+    !!onlineSession &&
+    !!liveOnlineGame &&
+    liveOnlineGame.status === "active" &&
+    !!opponentPlayerId &&
+    onlineConnectionStatus === "authenticated";
+  const opponentConnected = shouldTrackOpponentPresence
+    ? isOnlineOpponentConnected(onlinePeers, opponentPlayerId)
+    : false;
   const onlineGameSignature = liveOnlineGame
     ? JSON.stringify({
         blackPlayerId: liveOnlineGame.blackPlayerId,
@@ -176,6 +242,18 @@ function App() {
       })
     : null;
   const connectionLabel = getConnectionLabel(onlineConnectionStatus);
+  const disconnectElapsedMs =
+    opponentMissingSince === null ? 0 : Math.max(0, disconnectNow - opponentMissingSince);
+  const showDisconnectBanner =
+    !!onlineSession &&
+    !!liveOnlineGame &&
+    liveOnlineGame.status === "active" &&
+    opponentMissingSince !== null &&
+    disconnectElapsedMs >= ONLINE_DISCONNECT_DEBOUNCE_MS;
+  const canClaimDisconnectedWin =
+    disconnectDeadlineAt !== null && disconnectNow >= disconnectDeadlineAt;
+  const disconnectCountdownMs =
+    disconnectDeadlineAt === null ? 0 : Math.max(0, disconnectDeadlineAt - disconnectNow);
   const shouldShowOnlineWaiting =
     !!onlineSession &&
     !!liveOnlineGame &&
@@ -191,6 +269,71 @@ function App() {
   useEffect(() => {
     persistOnlineSession(onlineSession);
   }, [onlineSession]);
+
+  useEffect(() => {
+    if (opponentMissingSince === null) {
+      return;
+    }
+
+    setDisconnectNow(Date.now());
+    const intervalId = window.setInterval(() => {
+      setDisconnectNow(Date.now());
+    }, 250);
+
+    return () => {
+      window.clearInterval(intervalId);
+    };
+  }, [opponentMissingSince]);
+
+  useEffect(() => {
+    if (!liveOnlineGame || !isStaleOnlineGame(liveOnlineGame)) {
+      return;
+    }
+
+    const staleKey = `${liveOnlineGame.id}:${liveOnlineGame.updatedAt ?? liveOnlineGame.createdAt}`;
+
+    if (staleGameResolutionKeys.current.has(staleKey)) {
+      return;
+    }
+
+    staleGameResolutionKeys.current.add(staleKey);
+
+    void instantDb
+      .transact(
+        instantDb.tx.games[liveOnlineGame.id].update({
+          result: "abandoned",
+          status: "completed",
+          updatedAt: Date.now(),
+        }),
+      )
+      .catch(() => {
+        staleGameResolutionKeys.current.delete(staleKey);
+      });
+  }, [liveOnlineGame]);
+
+  useEffect(() => {
+    if (!shouldTrackOpponentPresence) {
+      setDisconnectActionError(null);
+      setDisconnectDeadlineAt(null);
+      setIsDisconnectActionPending(false);
+      setOpponentMissingSince(null);
+      return;
+    }
+
+    if (opponentConnected) {
+      setDisconnectActionError(null);
+      setDisconnectDeadlineAt(null);
+      setIsDisconnectActionPending(false);
+      setOpponentMissingSince(null);
+      return;
+    }
+
+    const now = Date.now();
+
+    setDisconnectNow(now);
+    setOpponentMissingSince((current) => current ?? now);
+    setDisconnectDeadlineAt((current) => current ?? now + ONLINE_ABANDONMENT_TIMEOUT_MS);
+  }, [opponentConnected, shouldTrackOpponentPresence]);
 
   useEffect(() => {
     if (!onlineViewSession) {
@@ -224,6 +367,7 @@ function App() {
       setOnlineViewSession(null);
       setOnlinePendingAction(null);
       setOnlineError("The saved online session could not be found.");
+      resetOnlineRuntimeState();
       setAppSession((current) => ({
         ...current,
         screen: "start",
@@ -236,6 +380,7 @@ function App() {
       setOnlineViewSession(null);
       setOnlinePendingAction(null);
       setOnlineError("This browser is not one of the players in the saved online session.");
+      resetOnlineRuntimeState();
       setAppSession((current) => ({
         ...current,
         screen: "start",
@@ -258,6 +403,7 @@ function App() {
       setOnlineViewSession(null);
       setOnlinePendingAction(null);
       setOnlineError("The online move history is invalid and could not be restored.");
+      resetOnlineRuntimeState();
       setAppSession((current) => ({
         ...current,
         screen: "start",
@@ -288,6 +434,13 @@ function App() {
     onlineViewPreferences.soundEnabled,
   ]);
 
+  function resetOnlineRuntimeState() {
+    setDisconnectActionError(null);
+    setDisconnectDeadlineAt(null);
+    setIsDisconnectActionPending(false);
+    setOpponentMissingSince(null);
+  }
+
   function updateSettings(update: Partial<AppSessionState["settings"]>) {
     setAppSession((current) => ({
       ...current,
@@ -303,6 +456,7 @@ function App() {
     setOnlineViewSession(null);
     setOnlinePendingAction(null);
     setOnlineError(null);
+    resetOnlineRuntimeState();
     setAppSession((current) => {
       const nextGame = createGameSessionFromSettings(current.settings, {
         soundEnabled: current.gameSession.soundEnabled,
@@ -322,6 +476,7 @@ function App() {
     setOnlineViewSession(null);
     setOnlinePendingAction(null);
     setOnlineError(null);
+    resetOnlineRuntimeState();
     setAppSession((current) => ({
       ...current,
       screen: "start",
@@ -443,6 +598,7 @@ function App() {
         instantDb.tx.games[match.id].update({
           blackPlayerId: anonymousPlayerId,
           status: "active",
+          updatedAt: Date.now(),
         }),
       );
 
@@ -484,11 +640,68 @@ function App() {
             payload.nextStatus.phase === "checkmate" || payload.nextStatus.phase === "stalemate"
               ? "completed"
               : "active",
+          updatedAt: Date.now(),
           whiteTimeRemaining: Math.max(0, payload.clockState.white),
         }),
       );
     },
   );
+
+  const handleClaimDisconnectedWin = useEffectEvent(async () => {
+    if (!liveOnlineGame || !onlinePlayerColor) {
+      return;
+    }
+
+    setDisconnectActionError(null);
+    setIsDisconnectActionPending(true);
+
+    try {
+      await instantDb.transact(
+        instantDb.tx.games[liveOnlineGame.id].update({
+          blackTimeRemaining:
+            onlineViewSession?.clockState.black ?? liveOnlineGame.blackTimeRemaining,
+          result: onlinePlayerColor,
+          status: "completed",
+          updatedAt: Date.now(),
+          whiteTimeRemaining:
+            onlineViewSession?.clockState.white ?? liveOnlineGame.whiteTimeRemaining,
+        }),
+      );
+    } catch {
+      setDisconnectActionError(
+        "The disconnect claim could not be saved. Wait for the connection to recover and try again.",
+      );
+    } finally {
+      setIsDisconnectActionPending(false);
+    }
+  });
+
+  const handleKeepWaiting = useEffectEvent(async () => {
+    if (!liveOnlineGame) {
+      return;
+    }
+
+    const nextDeadlineAt = Date.now() + ONLINE_ABANDONMENT_TIMEOUT_MS;
+
+    setDisconnectActionError(null);
+    setIsDisconnectActionPending(true);
+
+    try {
+      await instantDb.transact(
+        instantDb.tx.games[liveOnlineGame.id].update({
+          updatedAt: Date.now(),
+        }),
+      );
+
+      setDisconnectDeadlineAt(nextDeadlineAt);
+    } catch {
+      setDisconnectActionError(
+        "The extra wait time could not be saved. Wait for the connection to recover and try again.",
+      );
+    } finally {
+      setIsDisconnectActionPending(false);
+    }
+  });
 
   if (onlineSession) {
     if (shouldShowOnlineWaiting && liveOnlineGame) {
@@ -506,8 +719,26 @@ function App() {
       return (
         <GameScreen
           onlineGame={{
+            actionError: disconnectActionError,
+            completedResult: liveOnlineGame.status === "completed" ? liveOnlineGame.result : null,
             connectionLabel,
+            disconnectBanner: showDisconnectBanner
+              ? {
+                  canClaimWin: canClaimDisconnectedWin,
+                  countdownMs: disconnectCountdownMs,
+                  isPending: isDisconnectActionPending,
+                  onClaimWin: handleClaimDisconnectedWin,
+                  onKeepWaiting: handleKeepWaiting,
+                  opponentLabel: opponentAlias,
+                }
+              : null,
             onMove: handleOnlineMove,
+            opponentConnected: liveOnlineGame.status === "active" && !showDisconnectBanner,
+            pauseClockOnOpponentTurn: showDisconnectBanner,
+            playerLabels: onlinePlayerLabels ?? {
+              black: "Black",
+              white: "White",
+            },
             sessionCode: liveOnlineGame.code,
           }}
           onReturnToSetup={handleReturnToSetup}
