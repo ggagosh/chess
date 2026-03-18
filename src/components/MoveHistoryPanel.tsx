@@ -111,61 +111,64 @@ export function MoveHistoryPanel({
     <section className="info-card move-history-panel">
       <div className="move-log-header">
         <div>
-          <p className="panel-label">PGN Move History</p>
-          <p className="panel-caption">
-            The active line stays aligned with captures, clocks, and board state.
-          </p>
+          <p className="panel-label">Move Log</p>
+          <p className="panel-caption">Recent moves, current turn, and the active timeline.</p>
         </div>
         <span className="move-log-total">{timelineSummary}</span>
       </div>
-      <p className="pgn-preview">{pgn}</p>
 
       {moveRows.length > 0 ? (
-        <ol ref={listRef} className="move-list" aria-label="Move history">
-          {moveRows.map((row, rowIndex) => {
-            const whitePlyIndex = rowIndex * 2;
-            const blackPlyIndex = whitePlyIndex + 1;
-            const isCurrentWhiteMove = currentPlyIndex === whitePlyIndex;
-            const isCurrentBlackMove = currentPlyIndex === blackPlyIndex;
-            const isCurrentRow = isCurrentWhiteMove || isCurrentBlackMove;
-            const isFlashRow = flashPlyIndex === whitePlyIndex || flashPlyIndex === blackPlyIndex;
+        <>
+          <p className="pgn-preview">{pgn}</p>
+          <ol ref={listRef} className="move-list" aria-label="Move history">
+            {moveRows.map((row, rowIndex) => {
+              const whitePlyIndex = rowIndex * 2;
+              const blackPlyIndex = whitePlyIndex + 1;
+              const isCurrentWhiteMove = currentPlyIndex === whitePlyIndex;
+              const isCurrentBlackMove = currentPlyIndex === blackPlyIndex;
+              const isCurrentRow = isCurrentWhiteMove || isCurrentBlackMove;
+              const isFlashRow =
+                flashPlyIndex === whitePlyIndex || flashPlyIndex === blackPlyIndex;
 
-            return (
-              <li
-                key={row.number}
-                className={[
-                  "move-row",
-                  isCurrentRow ? "current-row" : "",
-                  isFlashRow ? "flash-row" : "",
-                ]
-                  .filter(Boolean)
-                  .join(" ")}
-              >
-                <span className="move-number">{row.number}.</span>
-                <span
-                  ref={isCurrentWhiteMove ? currentMoveRef : null}
-                  className={["move-san", isCurrentWhiteMove ? "current" : ""]
+              return (
+                <li
+                  key={row.number}
+                  className={[
+                    "move-row",
+                    isCurrentRow ? "current-row" : "",
+                    isFlashRow ? "flash-row" : "",
+                  ]
                     .filter(Boolean)
                     .join(" ")}
-                  title={buildMoveTitle(row.white)}
                 >
-                  {row.white.san}
-                </span>
-                <span
-                  ref={isCurrentBlackMove ? currentMoveRef : null}
-                  className={["move-san", isCurrentBlackMove ? "current" : ""]
-                    .filter(Boolean)
-                    .join(" ")}
-                  title={row.black ? buildMoveTitle(row.black) : "Black has not moved yet."}
-                >
-                  {row.black?.san ?? "..."}
-                </span>
-              </li>
-            );
-          })}
-        </ol>
+                  <span className="move-number">{row.number}.</span>
+                  <span
+                    ref={isCurrentWhiteMove ? currentMoveRef : null}
+                    className={["move-san", isCurrentWhiteMove ? "current" : ""]
+                      .filter(Boolean)
+                      .join(" ")}
+                    title={buildMoveTitle(row.white)}
+                  >
+                    {row.white.san}
+                  </span>
+                  <span
+                    ref={isCurrentBlackMove ? currentMoveRef : null}
+                    className={["move-san", isCurrentBlackMove ? "current" : ""]
+                      .filter(Boolean)
+                      .join(" ")}
+                    title={row.black ? buildMoveTitle(row.black) : "Black has not moved yet."}
+                  >
+                    {row.black?.san ?? "..."}
+                  </span>
+                </li>
+              );
+            })}
+          </ol>
+        </>
       ) : (
-        <p className="supporting-copy">No moves played yet. White has the first turn.</p>
+        <p className="move-history-empty">
+          Move history appears here after the first move. White has the opening turn.
+        </p>
       )}
 
       {inCheck ? (
@@ -177,12 +180,6 @@ export function MoveHistoryPanel({
       {futureCount > 0 ? (
         <p className="supporting-copy">
           Redo buffer available: {futureCount} future {futureCount === 1 ? "move" : "moves"}.
-        </p>
-      ) : null}
-
-      {historyIndex === 0 ? (
-        <p className="supporting-copy">
-          The timeline starts tracking as soon as the first move is committed.
         </p>
       ) : null}
     </section>
