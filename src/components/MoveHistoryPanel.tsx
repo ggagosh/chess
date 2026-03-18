@@ -75,11 +75,15 @@ export function MoveHistoryPanel({
       return;
     }
 
-    if (currentMoveRef.current) {
-      currentMoveRef.current.scrollIntoView({
+    const currentMove = currentMoveRef.current?.closest<HTMLElement>(".move-row");
+
+    if (currentMove) {
+      const nextScrollTop =
+        currentMove.offsetTop - Math.max(0, (list.clientHeight - currentMove.offsetHeight) / 2);
+
+      list.scrollTo({
+        top: Math.max(0, nextScrollTop),
         behavior: "smooth",
-        block: "nearest",
-        inline: "nearest",
       });
       return;
     }
@@ -127,8 +131,7 @@ export function MoveHistoryPanel({
               const isCurrentWhiteMove = currentPlyIndex === whitePlyIndex;
               const isCurrentBlackMove = currentPlyIndex === blackPlyIndex;
               const isCurrentRow = isCurrentWhiteMove || isCurrentBlackMove;
-              const isFlashRow =
-                flashPlyIndex === whitePlyIndex || flashPlyIndex === blackPlyIndex;
+              const isFlashRow = flashPlyIndex === whitePlyIndex || flashPlyIndex === blackPlyIndex;
 
               return (
                 <li
