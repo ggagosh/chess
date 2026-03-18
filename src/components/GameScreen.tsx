@@ -283,7 +283,7 @@ export function GameScreen({
   const [liveAnnouncement, setLiveAnnouncement] = useState("");
   const [boardSize, setBoardSize] = useState(0);
   const [moveAnimation, setMoveAnimation] = useState<MoveAnimationState | null>(null);
-  const boardCenterRef = useRef<HTMLDivElement | null>(null);
+  const boardGridRef = useRef<HTMLDivElement | null>(null);
   const squareRefs = useRef(new Map<Square, HTMLButtonElement | null>());
   const moveAnnouncementHistoryIndex = useRef<number | null>(null);
   const moveAnimationHistoryIndex = useRef<number | null>(null);
@@ -433,15 +433,15 @@ export function GameScreen({
   }, [boardPositions, focusedSquare, session.orientation]);
 
   useLayoutEffect(() => {
-    const boardCenter = boardCenterRef.current;
+    const boardGrid = boardGridRef.current;
 
-    if (!boardCenter) {
+    if (!boardGrid) {
       return;
     }
 
     const updateBoardSize = () => {
-      const { height, width } = boardCenter.getBoundingClientRect();
-      setBoardSize(Math.max(0, Math.floor(Math.min(width, height))));
+      const { width } = boardGrid.getBoundingClientRect();
+      setBoardSize(Math.max(0, Math.floor(width)));
     };
 
     updateBoardSize();
@@ -450,7 +450,7 @@ export function GameScreen({
       updateBoardSize();
     });
 
-    observer.observe(boardCenter);
+    observer.observe(boardGrid);
 
     return () => {
       observer.disconnect();
@@ -1061,9 +1061,7 @@ export function GameScreen({
   const boardShellStyle =
     boardSize > 0
       ? ({
-          "--board-size": `${boardSize}px`,
-          height: `${boardSize}px`,
-          width: `${boardSize}px`,
+          "--board-grid-size": `${boardSize}px`,
         } as CSSProperties)
       : undefined;
   const moveAnimationStyle =
@@ -1077,11 +1075,11 @@ export function GameScreen({
   return (
     <>
       <main className="app-shell game-shell">
-        <section className="experience-grid game-layout">
+        <section className="game-layout">
           <section className="board-panel game-board-panel">
-            <div className="board-top-stack">
-              <header className="game-toolbar" aria-label="Game status and controls">
-                <div className="toolbar-primary">
+            <header className="game-toolbar" aria-label="Game status and controls">
+              <div className="toolbar-primary">
+                <div className="toolbar-status-stack">
                   <div
                     className={[
                       "turn-indicator",
@@ -1102,154 +1100,169 @@ export function GameScreen({
                   <div className="toolbar-summary" aria-label="Game snapshot">
                     <span className="toolbar-chip">{displayStatusPhase}</span>
                     <span className="toolbar-chip">Move {historyIndex}</span>
-                    <span className="toolbar-chip">{timelineSummary}</span>
                     <span className="toolbar-chip">
                       {isOnlineGame
                         ? `Session ${onlineGame.sessionCode}`
                         : activeOpponentOption.label}
                     </span>
+                    {futureCount > 0 ? (
+                      <span className="toolbar-chip">
+                        {futureCount} future {futureCount === 1 ? "move" : "moves"}
+                      </span>
+                    ) : null}
                   </div>
                 </div>
 
-                <div className="toolbar-secondary">
-                  <div className="toolbar-meta">
-                    {isOnlineGame ? (
+                <div className="toolbar-actions" aria-label="Game controls">
+                  {!isOnlineGame ? (
+                    <>
+                      <button
+                        type="button"
+                        className="secondary-button"
+                        onClick={handleUndo}
+                        disabled={!canUndo}
+                      >
+                        Undo
+                      </button>
+                      <button
+                        type="button"
+                        className="secondary-button"
+                        onClick={handleRedo}
+                        disabled={!canRedo}
+                      >
+                        Redo
+                      </button>
+                    </>
+                  ) : null}
+                  <button type="button" className="secondary-button" onClick={flipBoard}>
+                    Flip
+                  </button>
+                  <button
+                    type="button"
+                    className={`secondary-button toggle-button ${session.soundEnabled ? "is-active" : ""}`}
+                    aria-pressed={session.soundEnabled}
+                    onClick={toggleSound}
+                  >
+                    {session.soundEnabled ? "Sound on" : "Sound off"}
+                  </button>
+                  <button
+                    type="button"
+                    className="secondary-button primary-action"
+                    onClick={returnToStartScreen}
+                  >
+                    New Game
+                  </button>
+                </div>
+              </div>
+
+              <div className="toolbar-secondary">
+                <div className="toolbar-meta">
+                  {isOnlineGame ? (
+                    <div className="toolbar-context">
+                      <span className="toolbar-note">{boardPerspective}</span>
+                      <span className="toolbar-note">{onlineGame.connectionLabel}</span>
+                      <span
+                        className={`toolbar-note presence-note ${onlineGame.opponentConnected ? "is-online" : "is-offline"}`}
+                      >
+                        {onlineGame.opponentConnected
+                          ? "Opponent connected"
+                          : "Opponent disconnected"}
+                      </span>
+                    </div>
+                  ) : (
+                    <>
+                      <label className="compact-field">
+                        <span className="compact-label">Opponent</span>
+                        <select
+                          aria-label="Opponent mode"
+                          className="toolbar-select"
+                          onChange={(event) =>
+                            handleOpponentModeChange(event.target.value as OpponentMode)
+                          }
+                          value={session.opponentMode}
+                        >
+                          {OPPONENT_MODE_OPTIONS.map((option) => (
+                            <option key={option.value} value={option.value}>
+                              {option.label}
+                            </option>
+                          ))}
+                        </select>
+                      </label>
+
                       <div className="toolbar-context">
                         <span className="toolbar-note">{boardPerspective}</span>
-                        <span className="toolbar-note">{onlineGame.connectionLabel}</span>
                         <span
-                          className={`toolbar-note presence-note ${onlineGame.opponentConnected ? "is-online" : "is-offline"}`}
+                          className={`toolbar-note ${isComputerMode ? "presence-note is-online" : ""}`}
                         >
-                          {onlineGame.opponentConnected
-                            ? "Opponent connected"
-                            : "Opponent disconnected"}
+                          {computerStatus}
                         </span>
                       </div>
-                    ) : (
-                      <>
-                        <label className="compact-field">
-                          <span className="compact-label">Opponent</span>
-                          <select
-                            aria-label="Opponent mode"
-                            className="toolbar-select"
-                            onChange={(event) =>
-                              handleOpponentModeChange(event.target.value as OpponentMode)
-                            }
-                            value={session.opponentMode}
-                          >
-                            {OPPONENT_MODE_OPTIONS.map((option) => (
-                              <option key={option.value} value={option.value}>
-                                {option.label}
-                              </option>
-                            ))}
-                          </select>
-                        </label>
+                    </>
+                  )}
+                </div>
+              </div>
 
-                        <div className="toolbar-context">
-                          <span className="toolbar-note">{boardPerspective}</span>
-                          <span className="toolbar-note">{computerStatus}</span>
-                        </div>
-                      </>
-                    )}
-                  </div>
+              {toolbarNotice ? <p className="toolbar-notice">{toolbarNotice}</p> : null}
+            </header>
 
-                  <div className="toolbar-actions" aria-label="Game controls">
-                    {!isOnlineGame ? (
-                      <>
-                        <button
-                          type="button"
-                          className="secondary-button"
-                          onClick={handleUndo}
-                          disabled={!canUndo}
-                        >
-                          Undo
-                        </button>
-                        <button
-                          type="button"
-                          className="secondary-button"
-                          onClick={handleRedo}
-                          disabled={!canRedo}
-                        >
-                          Redo
-                        </button>
-                      </>
-                    ) : null}
-                    <button type="button" className="secondary-button" onClick={flipBoard}>
-                      Flip
-                    </button>
-                    <button
-                      type="button"
-                      className={`secondary-button toggle-button ${session.soundEnabled ? "is-active" : ""}`}
-                      aria-pressed={session.soundEnabled}
-                      onClick={toggleSound}
-                    >
-                      {session.soundEnabled ? "Sound on" : "Sound off"}
-                    </button>
-                    <button
-                      type="button"
-                      className="secondary-button primary-action"
-                      onClick={returnToStartScreen}
-                    >
-                      New Game
-                    </button>
-                  </div>
+            {isOnlineGame && onlineGame.disconnectBanner ? (
+              <div
+                className={`disconnect-banner ${onlineGame.disconnectBanner.canClaimWin ? "is-expired" : ""}`}
+                aria-live="polite"
+                role="status"
+              >
+                <div className="disconnect-banner-copy">
+                  <span className="disconnect-banner-kicker">Connection</span>
+                  <strong>{onlineGame.disconnectBanner.opponentLabel} disconnected</strong>
+                  <span>
+                    {onlineGame.disconnectBanner.canClaimWin
+                      ? "The timer expired. Claim the win or keep waiting for a reconnect."
+                      : `Waiting ${formatClockTime(onlineGame.disconnectBanner.countdownMs)} for them to return.`}
+                  </span>
                 </div>
 
-                {toolbarNotice ? <p className="toolbar-notice">{toolbarNotice}</p> : null}
-              </header>
-
-              {isOnlineGame && onlineGame.disconnectBanner ? (
-                <div
-                  className={`disconnect-banner ${onlineGame.disconnectBanner.canClaimWin ? "is-expired" : ""}`}
-                  aria-live="polite"
-                  role="status"
-                >
-                  <div className="disconnect-banner-copy">
-                    <span className="disconnect-banner-kicker">Connection</span>
-                    <strong>{onlineGame.disconnectBanner.opponentLabel} disconnected</strong>
-                    <span>
-                      {onlineGame.disconnectBanner.canClaimWin
-                        ? "The timer expired. Claim the win or keep waiting for a reconnect."
-                        : `Waiting ${formatClockTime(onlineGame.disconnectBanner.countdownMs)} for them to return.`}
+                <div className="disconnect-banner-actions">
+                  {onlineGame.disconnectBanner.canClaimWin ? (
+                    <>
+                      <button
+                        type="button"
+                        className="secondary-button primary-action"
+                        disabled={onlineGame.disconnectBanner.isPending}
+                        onClick={onlineGame.disconnectBanner.onClaimWin}
+                      >
+                        {onlineGame.disconnectBanner.isPending ? "Working..." : "Claim win"}
+                      </button>
+                      <button
+                        type="button"
+                        className="secondary-button"
+                        disabled={onlineGame.disconnectBanner.isPending}
+                        onClick={onlineGame.disconnectBanner.onKeepWaiting}
+                      >
+                        Keep waiting
+                      </button>
+                    </>
+                  ) : (
+                    <span className="disconnect-banner-chip">
+                      {formatClockTime(onlineGame.disconnectBanner.countdownMs)} left
                     </span>
-                  </div>
-
-                  <div className="disconnect-banner-actions">
-                    {onlineGame.disconnectBanner.canClaimWin ? (
-                      <>
-                        <button
-                          type="button"
-                          className="secondary-button primary-action"
-                          disabled={onlineGame.disconnectBanner.isPending}
-                          onClick={onlineGame.disconnectBanner.onClaimWin}
-                        >
-                          {onlineGame.disconnectBanner.isPending ? "Working..." : "Claim win"}
-                        </button>
-                        <button
-                          type="button"
-                          className="secondary-button"
-                          disabled={onlineGame.disconnectBanner.isPending}
-                          onClick={onlineGame.disconnectBanner.onKeepWaiting}
-                        >
-                          Keep waiting
-                        </button>
-                      </>
-                    ) : (
-                      <span className="disconnect-banner-chip">
-                        {formatClockTime(onlineGame.disconnectBanner.countdownMs)} left
-                      </span>
-                    )}
-                  </div>
+                  )}
                 </div>
-              ) : null}
-            </div>
+              </div>
+            ) : null}
 
-            <div className="board-stage">
+            <div className="game-focus-panel">
               {renderPlayerBanner(topPlayerColor)}
 
-              <div ref={boardCenterRef} className="board-center">
-                <div className="board-shell" style={boardShellStyle}>
-                  <div className="board-grid" role="grid" aria-label="Interactive chess board">
+              <div className="board-center">
+                <div className="board-frame">
+                  <div className="board-shell" style={boardShellStyle}>
+                    <div
+                      ref={boardGridRef}
+                      className="board-grid"
+                      role="grid"
+                      aria-describedby="board-help"
+                      aria-label="Interactive chess board"
+                    >
                     {boardCells.map((cell, index) => {
                       const targetMoves = moveTargets.get(cell.square) ?? [];
                       const isSelected = selectedSquare === cell.square;
@@ -1353,51 +1366,58 @@ export function GameScreen({
                         </button>
                       );
                     })}
-                  </div>
 
-                  {moveAnimation ? (
-                    <div className="move-animation-layer" aria-hidden="true">
-                      <span
-                        className={[
-                          "piece",
-                          `piece-${moveAnimation.piece.color}`,
-                          "moving-piece",
-                          moveAnimation.isSettled ? "is-settled" : "",
-                        ]
-                          .filter(Boolean)
-                          .join(" ")}
-                        style={{
-                          ...moveAnimationStyle,
-                          left: `${(boardPositions.get(moveAnimation.destinationSquare)?.col ?? 0) * (boardSize / 8)}px`,
-                          top: `${(boardPositions.get(moveAnimation.destinationSquare)?.row ?? 0) * (boardSize / 8)}px`,
-                        }}
-                      >
-                        {moveAnimation.piece.glyph}
-                      </span>
+                      {moveAnimation ? (
+                        <div className="move-animation-layer" aria-hidden="true">
+                          <span
+                            className={[
+                              "piece",
+                              `piece-${moveAnimation.piece.color}`,
+                              "moving-piece",
+                              moveAnimation.isSettled ? "is-settled" : "",
+                            ]
+                              .filter(Boolean)
+                              .join(" ")}
+                            style={{
+                              ...moveAnimationStyle,
+                              left: `${(boardPositions.get(moveAnimation.destinationSquare)?.col ?? 0) * (boardSize / 8)}px`,
+                              top: `${(boardPositions.get(moveAnimation.destinationSquare)?.row ?? 0) * (boardSize / 8)}px`,
+                            }}
+                          >
+                            {moveAnimation.piece.glyph}
+                          </span>
+                        </div>
+                      ) : null}
                     </div>
-                  ) : null}
+                  </div>
                 </div>
               </div>
 
-              {renderPlayerBanner(bottomPlayerColor)}
+              <div className="board-footer">
+                {renderPlayerBanner(bottomPlayerColor)}
+                <p id="board-help" className="board-help">
+                  Use arrow keys to move square focus. Press Enter or Space to select a piece and
+                  commit a highlighted legal move.
+                </p>
+              </div>
             </div>
+
+            <section className="game-secondary-panel">
+              <MoveHistoryPanel
+                futureCount={futureCount}
+                historyIndex={historyIndex}
+                inCheck={gameStatus.inCheck}
+                moves={moveLog}
+                pgn={pgnPreview}
+                timelineSummary={timelineSummary}
+                turnLabel={toTitleCase(gameStatus.turn)}
+              />
+            </section>
 
             <p className="sr-only" aria-live="polite" role="status">
               {liveAnnouncement}
             </p>
           </section>
-
-          <aside className="inspector-panel move-history-sidebar">
-            <MoveHistoryPanel
-              futureCount={futureCount}
-              historyIndex={historyIndex}
-              inCheck={gameStatus.inCheck}
-              moves={moveLog}
-              pgn={pgnPreview}
-              timelineSummary={timelineSummary}
-              turnLabel={toTitleCase(gameStatus.turn)}
-            />
-          </aside>
         </section>
       </main>
 
