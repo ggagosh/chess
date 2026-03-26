@@ -1,11 +1,29 @@
 :root {
+  --color-bg: #efe7db;
+  --color-bg-deep: #e3d8c8;
+  --color-panel: rgba(250, 246, 240, 0.84);
+  --color-panel-strong: rgba(248, 243, 236, 0.94);
+  --color-panel-muted: rgba(255, 255, 255, 0.56);
+  --color-line: rgba(74, 60, 42, 0.12);
+  --color-line-strong: rgba(74, 60, 42, 0.18);
+  --color-ink: #211a14;
+  --color-ink-soft: #3b3026;
+  --color-muted: #6a5c4d;
+  --color-muted-strong: #7a6a58;
+  --color-olive: #56654d;
+  --color-olive-soft: #d9e2d2;
+  --color-olive-ink: #32422f;
+  --color-amber: #b98649;
+  --color-amber-soft: #efe2c9;
+  --color-danger: #b24938;
   font-family: "Avenir Next", "Segoe UI", sans-serif;
   line-height: 1.5;
   font-weight: 400;
-  color: #201914;
+  color: var(--color-ink);
   background:
-    radial-gradient(circle at top left, rgba(255, 233, 198, 0.8), transparent 32%),
-    linear-gradient(180deg, #f8f1e2 0%, #eadfcb 48%, #ddd2be 100%);
+    radial-gradient(circle at 0% 0%, rgba(246, 226, 194, 0.76), transparent 28%),
+    radial-gradient(circle at 88% 10%, rgba(211, 221, 205, 0.7), transparent 26%),
+    linear-gradient(180deg, #f4eee4 0%, var(--color-bg) 50%, var(--color-bg-deep) 100%);
   font-synthesis: none;
   text-rendering: optimizeLegibility;
   -webkit-font-smoothing: antialiased;
@@ -16,8 +34,10 @@
   box-sizing: border-box;
 }
 
+html,
+body,
 #root {
-  min-height: 100vh;
+  min-height: 100%;
 }
 
 body {
@@ -28,20 +48,31 @@ body {
 body::before {
   content: "";
   position: fixed;
-  inset: 18px;
-  border: 1px solid rgba(68, 50, 32, 0.12);
-  border-radius: 36px;
+  inset: 16px;
+  border: 1px solid rgba(76, 61, 43, 0.1);
+  border-radius: 34px;
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.55);
   pointer-events: none;
 }
 
 h1,
-h2 {
+h2,
+h3 {
+  margin: 0;
+  color: var(--color-ink);
   font-family: "Iowan Old Style", "Palatino Linotype", "Book Antiqua", serif;
-  color: #1f1810;
+  letter-spacing: -0.04em;
 }
 
 p {
   margin: 0;
+}
+
+button,
+input,
+select,
+textarea {
+  font: inherit;
 }
 
 code {
@@ -49,10 +80,10 @@ code {
   align-items: center;
   padding: 4px 8px;
   border-radius: 999px;
-  background: rgba(41, 31, 21, 0.08);
-  color: #1f1810;
+  background: rgba(42, 33, 24, 0.08);
+  color: var(--color-ink);
   font-family: "SFMono-Regular", Menlo, Monaco, monospace;
-  font-size: 0.9rem;
+  font-size: 0.88rem;
 }
 
 @media (max-width: 920px) {

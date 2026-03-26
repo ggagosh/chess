@@ -114,9 +114,13 @@ export function MoveHistoryPanel({
   return (
     <section className="info-card move-history-panel">
       <div className="move-log-header">
-        <div>
-          <p className="panel-label">Move Log</p>
-          <p className="panel-caption">Recent moves, current turn, and the active timeline.</p>
+        <div className="move-log-heading">
+          <p className="panel-label">Timeline</p>
+          <p className="panel-caption">
+            {moveRows.length > 0
+              ? `${turnLabel} ${inCheck ? "must answer the check." : "is currently on move."}`
+              : "The move list appears here after the opening move."}
+          </p>
         </div>
         <span className="move-log-total">{timelineSummary}</span>
       </div>
@@ -174,16 +178,20 @@ export function MoveHistoryPanel({
         </p>
       )}
 
-      {inCheck ? (
-        <p className="supporting-copy">
-          {turnLabel} remains in check until a legal response is committed.
-        </p>
-      ) : null}
+      {inCheck || futureCount > 0 ? (
+        <div className="move-log-notes">
+          {inCheck ? (
+            <p className="supporting-copy">
+              {turnLabel} remains in check until a legal response is committed.
+            </p>
+          ) : null}
 
-      {futureCount > 0 ? (
-        <p className="supporting-copy">
-          Redo buffer available: {futureCount} future {futureCount === 1 ? "move" : "moves"}.
-        </p>
+          {futureCount > 0 ? (
+            <p className="supporting-copy">
+              Redo buffer available: {futureCount} future {futureCount === 1 ? "move" : "moves"}.
+            </p>
+          ) : null}
+        </div>
       ) : null}
     </section>
   );

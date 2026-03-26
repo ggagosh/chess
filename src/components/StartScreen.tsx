@@ -65,23 +65,42 @@ export function StartScreen({
     <main className="app-shell start-screen-shell">
       <section className="start-layout">
         <section className="board-panel setup-panel">
-          <div className="setup-header">
-            <div className="setup-header-copy">
-              <p className="panel-label">Game Setup</p>
-              <h1 className="setup-title">Start a game</h1>
-              <p className="panel-caption">
-                Choose a local setup or open an online session code. Your latest local settings stay
-                selected between visits.
-              </p>
+          <div className="setup-hero">
+            <div className="setup-header">
+              <div className="setup-header-copy">
+                <p className="panel-label">Board-First Chess</p>
+                <h1 className="setup-title">Start a game without the clutter.</h1>
+                <p className="panel-caption">
+                  Jump into a local board or open a live room. Your latest pace, opponent, and side
+                  stay ready between visits.
+                </p>
+              </div>
+            </div>
+
+            <div className="setup-summary-strip" aria-label="Selected local setup">
+              <div className="setup-summary-chip">
+                <span className="metric-label">Clock</span>
+                <strong>{getTimeLabel(settings.timeControlMinutes)}</strong>
+              </div>
+              <div className="setup-summary-chip">
+                <span className="metric-label">Opponent</span>
+                <strong>{activeOpponent.label}</strong>
+              </div>
+              <div className="setup-summary-chip">
+                <span className="metric-label">Color</span>
+                <strong>{colorLabel}</strong>
+              </div>
             </div>
           </div>
 
           <div className="play-path-grid">
-            <section className="setup-card play-path-card">
+            <section className="setup-card play-path-card play-path-card-primary">
               <div className="setup-card-copy">
-                <p className="panel-label">Play Locally</p>
+                <p className="panel-label">Quick Play</p>
+                <h2 className="setup-card-title">Local board, ready now</h2>
                 <p className="supporting-copy">
-                  Start on this device with the current clock, opponent, and color settings.
+                  Start immediately on this device with the current clock, opponent, and board
+                  preference.
                 </p>
               </div>
 
@@ -97,10 +116,11 @@ export function StartScreen({
 
             <section className="setup-card play-path-card">
               <div className="setup-card-copy">
-                <p className="panel-label">Play Online</p>
+                <p className="panel-label">Online Match</p>
+                <h2 className="setup-card-title">Create or join a live room</h2>
                 <p className="supporting-copy">
-                  Create a shareable code or join an existing room for real-time browser-to-browser
-                  play.
+                  Open a shareable room code or join an existing one for real-time
+                  browser-to-browser play.
                 </p>
               </div>
 
@@ -149,23 +169,11 @@ export function StartScreen({
 
           <div className="local-setup-header">
             <div>
-              <p className="panel-label">Local Setup</p>
-              <p className="supporting-copy">These controls only affect the local play path.</p>
-            </div>
-          </div>
-
-          <div className="setup-summary-strip" aria-label="Selected local setup">
-            <div className="setup-summary-chip">
-              <span className="metric-label">Clock</span>
-              <strong>{getTimeLabel(settings.timeControlMinutes)}</strong>
-            </div>
-            <div className="setup-summary-chip">
-              <span className="metric-label">Opponent</span>
-              <strong>{activeOpponent.label}</strong>
-            </div>
-            <div className="setup-summary-chip">
-              <span className="metric-label">Color</span>
-              <strong>{colorLabel}</strong>
+              <p className="panel-label">Tune Quick Play</p>
+              <p className="supporting-copy">
+                These settings shape the local board only. Online rooms keep the selected clock and
+                always seat the host as White.
+              </p>
             </div>
           </div>
 

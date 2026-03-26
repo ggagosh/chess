@@ -36,7 +36,7 @@ export function OnlineWaitingScreen({
         <section className="board-panel waiting-panel">
           <div className="setup-header waiting-header">
             <div className="setup-header-copy">
-              <p className="panel-label">Waiting For Opponent</p>
+              <p className="panel-label">Online Match</p>
               <h1 className="setup-title">Share this match code</h1>
               <p className="panel-caption">
                 The room is live. As soon as a second browser joins, the game will begin
@@ -45,7 +45,6 @@ export function OnlineWaitingScreen({
             </div>
 
             <div className="setup-header-actions waiting-actions">
-              <p className="setup-current-selection">{connectionLabel}</p>
               <button type="button" className="secondary-button" onClick={onCancel}>
                 Cancel
               </button>
@@ -53,7 +52,10 @@ export function OnlineWaitingScreen({
           </div>
 
           <div className="waiting-code-card" aria-live="polite">
-            <span className="metric-label">Session Code</span>
+            <div className="waiting-code-meta">
+              <span className="metric-label">Session Code</span>
+              <span className="toolbar-chip">{connectionLabel}</span>
+            </div>
             <strong>{gameCode}</strong>
             <div className="inline-field-row">
               <button

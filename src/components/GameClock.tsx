@@ -65,6 +65,8 @@ export function GameClock({
         `clock-${player}`,
         isActive ? "active" : "",
         isCritical ? "critical" : "",
+        isPaused ? "paused" : "",
+        isInCheck ? "in-check" : "",
       ]
         .filter(Boolean)
         .join(" ")}

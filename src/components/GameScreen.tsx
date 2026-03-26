@@ -417,32 +417,46 @@ export function GameScreen({
     isOnlineGame && !gameResult
       ? `${playerLabels[gameStatus.turn]} is on move`
       : (statusDetail ?? boardPerspective);
+  const phaseLabel = displayStatusPhase === "active" ? "Live" : toTitleCase(displayStatusPhase);
+  const boardStateLabel = !isLivePosition
+    ? "Reviewing line"
+    : isGameOver
+      ? "Final position"
+      : "Live position";
+  const modeLabel = isOnlineGame
+    ? "Online Match"
+    : isComputerMode
+      ? "Computer Match"
+      : "Local Match";
+  const snapshotLabel = isOnlineGame
+    ? `Session ${onlineGame.sessionCode}`
+    : activeOpponentOption.label;
   const boardSquareStyles = useMemo<Record<string, CSSProperties>>(() => {
     const styles: Record<string, CSSProperties> = {};
 
     if (lastMove) {
       appendBoxShadow(
         ensureSquareStyle(styles, lastMove.from),
-        "inset 0 0 0 999px rgba(244, 196, 94, 0.18)",
+        "inset 0 0 0 999px rgba(197, 161, 98, 0.18)",
       );
       appendBoxShadow(
         ensureSquareStyle(styles, lastMove.to),
-        "inset 0 0 0 999px rgba(244, 196, 94, 0.34)",
+        "inset 0 0 0 999px rgba(197, 161, 98, 0.32)",
       );
     }
 
     if (checkedKingSquare) {
       const checkedStyle = ensureSquareStyle(styles, checkedKingSquare);
-      appendBoxShadow(checkedStyle, "inset 0 0 0 999px rgba(203, 45, 45, 0.28)");
-      appendBoxShadow(checkedStyle, "inset 0 0 0 3px rgba(203, 45, 45, 0.94)");
+      appendBoxShadow(checkedStyle, "inset 0 0 0 999px rgba(178, 73, 56, 0.24)");
+      appendBoxShadow(checkedStyle, "inset 0 0 0 3px rgba(178, 73, 56, 0.9)");
     }
 
     if (selectedSquare) {
       const selectedStyle = ensureSquareStyle(styles, selectedSquare);
-      appendBoxShadow(selectedStyle, "inset 0 0 0 3px rgba(56, 153, 228, 0.96)");
+      appendBoxShadow(selectedStyle, "inset 0 0 0 3px rgba(86, 101, 78, 0.94)");
       appendBackgroundLayer(
         selectedStyle,
-        "linear-gradient(0deg, rgba(67, 189, 255, 0.16), rgba(67, 189, 255, 0.16))",
+        "linear-gradient(0deg, rgba(145, 161, 132, 0.18), rgba(145, 161, 132, 0.18))",
       );
     }
 
@@ -450,17 +464,17 @@ export function GameScreen({
       const targetStyle = ensureSquareStyle(styles, square);
 
       if (targetMoves.some((move) => move.isCapture)) {
-        appendBoxShadow(targetStyle, "inset 0 0 0 5px rgba(126, 35, 35, 0.72)");
+        appendBoxShadow(targetStyle, "inset 0 0 0 5px rgba(115, 59, 47, 0.72)");
         appendBackgroundLayer(
           targetStyle,
-          "linear-gradient(0deg, rgba(203, 68, 56, 0.12), rgba(203, 68, 56, 0.12))",
+          "linear-gradient(0deg, rgba(171, 103, 84, 0.14), rgba(171, 103, 84, 0.14))",
         );
         continue;
       }
 
       appendBackgroundLayer(
         targetStyle,
-        "radial-gradient(circle, rgba(30, 24, 18, 0.42) 0 16%, transparent 17% 100%)",
+        "radial-gradient(circle, rgba(44, 39, 31, 0.4) 0 16%, transparent 17% 100%)",
       );
     }
 
@@ -718,6 +732,23 @@ export function GameScreen({
     const label = playerLabels[color];
     const materialAdvantage = getMaterialAdvantageLabel(capturedPieces, color);
     const isActiveTurn = !isPaused && !isGameOver && gameStatus.turn === color;
+    const bannerRole =
+      isOnlineGame || isComputerMode
+        ? color === playerColor
+          ? "You"
+          : "Opponent"
+        : toTitleCase(color);
+    const captureSummary =
+      capturedByPlayer.length > 0
+        ? `${capturedByPlayer.length} capture${capturedByPlayer.length === 1 ? "" : "s"}`
+        : "No captures yet";
+    const bannerStatus = isPaused
+      ? "Paused"
+      : isActiveTurn
+        ? gameStatus.inCheck
+          ? "On move · In check"
+          : "On move"
+        : captureSummary;
 
     return (
       <div
@@ -733,6 +764,7 @@ export function GameScreen({
         <div className="player-banner-copy">
           <div className="player-banner-heading">
             <span className="player-banner-name">{label}</span>
+            <span className="player-banner-tag">{bannerRole}</span>
             {materialAdvantage ? (
               <span
                 className="material-advantage"
@@ -742,13 +774,7 @@ export function GameScreen({
               </span>
             ) : null}
           </div>
-          <span className="player-banner-caption">
-            {isActiveTurn
-              ? color === playerColor && (isOnlineGame || isComputerMode)
-                ? "On move"
-                : "To move"
-              : getCapturedByPlayerCaption(color)}
-          </span>
+          <span className="player-banner-caption">{bannerStatus}</span>
           <div className="captured-strip" aria-label={getCapturedByPlayerCaption(color)}>
             {capturedByPlayer.length > 0 ? (
               capturedByPlayer.map((piece, index) => (
@@ -962,209 +988,212 @@ export function GameScreen({
     <>
       <main className="app-shell game-shell">
         <section className="game-layout">
-          <section className="game-board-panel">
-            <div className="game-stage-shell">
-              <div className="game-focus-panel">
-                {renderPlayerBanner(topPlayerColor)}
-
-                <div className="board-center">
-                  <div className="board-frame">
-                    <Chessboard
-                      options={{
-                        id: "game-board",
-                        position: fen,
-                        boardOrientation: session.orientation,
-                        allowAutoScroll: false,
-                        allowDragging: !boardInputLocked,
-                        allowDrawingArrows: false,
-                        animationDurationInMs: 180,
-                        boardStyle: {
-                          borderRadius: "28px",
-                          boxShadow: "0 28px 56px rgba(29, 20, 12, 0.22)",
-                          overflow: "hidden",
-                        },
-                        squareStyle: {
-                          boxSizing: "border-box",
-                        },
-                        squareStyles: boardSquareStyles,
-                        darkSquareStyle: {
-                          backgroundColor: "#7b9577",
-                        },
-                        lightSquareStyle: {
-                          backgroundColor: "#ead4a7",
-                        },
-                        darkSquareNotationStyle: {
-                          color: "rgba(26, 20, 13, 0.58)",
-                        },
-                        lightSquareNotationStyle: {
-                          color: "rgba(26, 20, 13, 0.72)",
-                        },
-                        alphaNotationStyle: {
-                          fontSize: "0.72rem",
-                          fontWeight: 700,
-                        },
-                        numericNotationStyle: {
-                          fontSize: "0.72rem",
-                          fontWeight: 700,
-                        },
-                        canDragPiece: ({ square }) => {
-                          if (!square || boardInputLocked) {
-                            return false;
-                          }
-
-                          const piece = game.get(square as Square);
-
-                          if (!piece) {
-                            return false;
-                          }
-
-                          return (piece.color === "w" ? "white" : "black") === gameStatus.turn;
-                        },
-                        onPieceDrop: ({ sourceSquare, targetSquare }) =>
-                          handlePieceDrop(sourceSquare as Square, targetSquare as Square | null),
-                        onSquareClick: ({ square }) => handleBoardSquareClick(square as Square),
-                      }}
-                    />
-                  </div>
-                </div>
-
-                <div className="board-footer">
-                  {renderPlayerBanner(bottomPlayerColor)}
-                  <p id="board-help" className="board-help">
-                    Drag a piece or tap a square to select it, then commit a highlighted move.
-                  </p>
-                </div>
+          <header className="game-topbar" aria-label="Game status and controls">
+            <div className="game-topbar-copy">
+              <p className="panel-label">{modeLabel}</p>
+              <div className="game-topbar-heading">
+                <h1 className="game-title">{turnStatusLabel}</h1>
+                <span className={["game-phase-badge", `phase-${displayStatusPhase}`].join(" ")}>
+                  {phaseLabel}
+                </span>
               </div>
+              <p className="game-topbar-detail">{turnStatusMeta}</p>
             </div>
 
+            <div className="game-topbar-meta" aria-label="Game snapshot">
+              <span className="toolbar-chip">{boardStateLabel}</span>
+              <span className="toolbar-chip">Move {historyIndex}</span>
+              <span className="toolbar-chip">{snapshotLabel}</span>
+              {futureCount > 0 ? <span className="toolbar-chip">Redo {futureCount}</span> : null}
+            </div>
+
+            <div className="game-topbar-actions" aria-label="Game controls">
+              {!isOnlineGame ? (
+                <>
+                  <button
+                    type="button"
+                    className="secondary-button"
+                    onClick={handleUndo}
+                    disabled={!canUndo}
+                  >
+                    Undo
+                  </button>
+                  <button
+                    type="button"
+                    className="secondary-button"
+                    onClick={handleRedo}
+                    disabled={!canRedo}
+                  >
+                    Redo
+                  </button>
+                </>
+              ) : null}
+              <button type="button" className="secondary-button" onClick={flipBoard}>
+                Flip
+              </button>
+              <button
+                type="button"
+                className={`secondary-button toggle-button ${session.soundEnabled ? "is-active" : ""}`}
+                aria-pressed={session.soundEnabled}
+                onClick={toggleSound}
+              >
+                {session.soundEnabled ? "Sound on" : "Sound off"}
+              </button>
+              <button
+                type="button"
+                className="secondary-button primary-action"
+                onClick={returnToStartScreen}
+              >
+                New Game
+              </button>
+            </div>
+          </header>
+
+          <section className="game-main">
+            <section className="game-stage-panel">
+              {renderPlayerBanner(topPlayerColor)}
+
+              <div className="board-center">
+                <div className="board-frame">
+                  <Chessboard
+                    options={{
+                      id: "game-board",
+                      position: fen,
+                      boardOrientation: session.orientation,
+                      allowAutoScroll: false,
+                      allowDragging: !boardInputLocked,
+                      allowDrawingArrows: false,
+                      animationDurationInMs: 160,
+                      boardStyle: {
+                        borderRadius: "30px",
+                        overflow: "hidden",
+                      },
+                      squareStyle: {
+                        boxSizing: "border-box",
+                      },
+                      squareStyles: boardSquareStyles,
+                      darkSquareStyle: {
+                        backgroundColor: "#78856a",
+                      },
+                      lightSquareStyle: {
+                        backgroundColor: "#e6d7bc",
+                      },
+                      darkSquareNotationStyle: {
+                        color: "rgba(35, 30, 24, 0.58)",
+                      },
+                      lightSquareNotationStyle: {
+                        color: "rgba(35, 30, 24, 0.72)",
+                      },
+                      alphaNotationStyle: {
+                        fontSize: "0.68rem",
+                        fontWeight: 700,
+                      },
+                      numericNotationStyle: {
+                        fontSize: "0.68rem",
+                        fontWeight: 700,
+                      },
+                      canDragPiece: ({ square }) => {
+                        if (!square || boardInputLocked) {
+                          return false;
+                        }
+
+                        const piece = game.get(square as Square);
+
+                        if (!piece) {
+                          return false;
+                        }
+
+                        return (piece.color === "w" ? "white" : "black") === gameStatus.turn;
+                      },
+                      onPieceDrop: ({ sourceSquare, targetSquare }) =>
+                        handlePieceDrop(sourceSquare as Square, targetSquare as Square | null),
+                      onSquareClick: ({ square }) => handleBoardSquareClick(square as Square),
+                    }}
+                  />
+                </div>
+              </div>
+
+              <div className="board-footer">
+                {renderPlayerBanner(bottomPlayerColor)}
+                <div className="board-footer-meta">
+                  <p id="board-help" className="board-help">
+                    Drag a piece or tap a square to select a move.
+                  </p>
+                  <span className="board-footnote">
+                    {boardStateLabel} · {boardPerspective}
+                  </span>
+                </div>
+              </div>
+            </section>
+
             <aside className="game-side-rail">
-              <header className="game-toolbar" aria-label="Game status and controls">
-                <div className="toolbar-primary">
-                  <div className="toolbar-status-stack">
-                    <div
-                      className={[
-                        "turn-indicator",
-                        `phase-${displayStatusPhase}`,
-                        gameStatus.turn === playerColor ? "is-player-turn" : "is-opponent-turn",
-                      ]
-                        .filter(Boolean)
-                        .join(" ")}
-                    >
-                      <span className="turn-indicator-dot" aria-hidden="true" />
-                      <div className="turn-indicator-copy">
-                        <span className="turn-indicator-kicker">Turn</span>
-                        <strong>{turnStatusLabel}</strong>
-                        <span>{turnStatusMeta}</span>
-                      </div>
-                    </div>
+              <section className="info-card game-context-card">
+                <div className="game-context-header">
+                  <div>
+                    <p className="panel-label">
+                      {isOnlineGame ? "Match Context" : "Board Context"}
+                    </p>
+                    <p className="panel-caption">
+                      {isOnlineGame
+                        ? "Connection, seat, and live-room details."
+                        : "Mode, perspective, and current opponent settings."}
+                    </p>
+                  </div>
+                  <span className="toolbar-chip">{snapshotLabel}</span>
+                </div>
 
-                    <div className="toolbar-summary" aria-label="Game snapshot">
-                      <span className="toolbar-chip">{displayStatusPhase}</span>
-                      <span className="toolbar-chip">Move {historyIndex}</span>
-                      <span className="toolbar-chip">
-                        {isOnlineGame
-                          ? `Session ${onlineGame.sessionCode}`
-                          : activeOpponentOption.label}
+                {isOnlineGame ? (
+                  <div className="game-context-grid">
+                    <div className="context-stat">
+                      <span className="context-stat-label">Perspective</span>
+                      <strong className="context-stat-value">{boardPerspective}</strong>
+                    </div>
+                    <div className="context-stat">
+                      <span className="context-stat-label">Connection</span>
+                      <strong className="context-stat-value">{onlineGame.connectionLabel}</strong>
+                    </div>
+                    <div className="context-stat">
+                      <span className="context-stat-label">Presence</span>
+                      <strong className="context-stat-value">
+                        {onlineGame.opponentConnected
+                          ? "Opponent connected"
+                          : "Opponent disconnected"}
+                      </strong>
+                    </div>
+                  </div>
+                ) : (
+                  <>
+                    <label className="compact-field">
+                      <span className="compact-label">Opponent</span>
+                      <select
+                        aria-label="Opponent mode"
+                        className="toolbar-select"
+                        onChange={(event) =>
+                          handleOpponentModeChange(event.target.value as OpponentMode)
+                        }
+                        value={session.opponentMode}
+                      >
+                        {OPPONENT_MODE_OPTIONS.map((option) => (
+                          <option key={option.value} value={option.value}>
+                            {option.label}
+                          </option>
+                        ))}
+                      </select>
+                    </label>
+
+                    <div className="game-context-notes">
+                      <span className="toolbar-note">{boardPerspective}</span>
+                      <span
+                        className={`toolbar-note ${isComputerMode ? "presence-note is-online" : ""}`}
+                      >
+                        {computerStatus}
                       </span>
-                      {futureCount > 0 ? (
-                        <span className="toolbar-chip">
-                          {futureCount} future {futureCount === 1 ? "move" : "moves"}
-                        </span>
-                      ) : null}
                     </div>
-                  </div>
-
-                  <div className="toolbar-actions" aria-label="Game controls">
-                    {!isOnlineGame ? (
-                      <>
-                        <button
-                          type="button"
-                          className="secondary-button"
-                          onClick={handleUndo}
-                          disabled={!canUndo}
-                        >
-                          Undo
-                        </button>
-                        <button
-                          type="button"
-                          className="secondary-button"
-                          onClick={handleRedo}
-                          disabled={!canRedo}
-                        >
-                          Redo
-                        </button>
-                      </>
-                    ) : null}
-                    <button type="button" className="secondary-button" onClick={flipBoard}>
-                      Flip
-                    </button>
-                    <button
-                      type="button"
-                      className={`secondary-button toggle-button ${session.soundEnabled ? "is-active" : ""}`}
-                      aria-pressed={session.soundEnabled}
-                      onClick={toggleSound}
-                    >
-                      {session.soundEnabled ? "Sound on" : "Sound off"}
-                    </button>
-                    <button
-                      type="button"
-                      className="secondary-button primary-action"
-                      onClick={returnToStartScreen}
-                    >
-                      New Game
-                    </button>
-                  </div>
-                </div>
-
-                <div className="toolbar-secondary">
-                  <div className="toolbar-meta">
-                    {isOnlineGame ? (
-                      <div className="toolbar-context">
-                        <span className="toolbar-note">{boardPerspective}</span>
-                        <span className="toolbar-note">{onlineGame.connectionLabel}</span>
-                        <span
-                          className={`toolbar-note presence-note ${onlineGame.opponentConnected ? "is-online" : "is-offline"}`}
-                        >
-                          {onlineGame.opponentConnected
-                            ? "Opponent connected"
-                            : "Opponent disconnected"}
-                        </span>
-                      </div>
-                    ) : (
-                      <>
-                        <label className="compact-field">
-                          <span className="compact-label">Opponent</span>
-                          <select
-                            aria-label="Opponent mode"
-                            className="toolbar-select"
-                            onChange={(event) =>
-                              handleOpponentModeChange(event.target.value as OpponentMode)
-                            }
-                            value={session.opponentMode}
-                          >
-                            {OPPONENT_MODE_OPTIONS.map((option) => (
-                              <option key={option.value} value={option.value}>
-                                {option.label}
-                              </option>
-                            ))}
-                          </select>
-                        </label>
-
-                        <div className="toolbar-context">
-                          <span className="toolbar-note">{boardPerspective}</span>
-                          <span
-                            className={`toolbar-note ${isComputerMode ? "presence-note is-online" : ""}`}
-                          >
-                            {computerStatus}
-                          </span>
-                        </div>
-                      </>
-                    )}
-                  </div>
-                </div>
+                  </>
+                )}
 
                 {toolbarNotice ? <p className="toolbar-notice">{toolbarNotice}</p> : null}
-              </header>
+              </section>
 
               {isOnlineGame && onlineGame.disconnectBanner ? (
                 <div
